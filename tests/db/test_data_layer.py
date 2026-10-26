@@ -244,3 +244,12 @@ def test_merge_ignores_unknown_blocks(s, world):
                              start=0, end=5, quote="xxxxx", explanation="—", confidence=0.5, match_score=100)
     out = pipeline.merge_findings(s, world["doc"].id, [RuleGroupResult(candidates=[ghost])])
     assert out["document"]["worst_level"] == "ok"
+
+
+def test_batch_passport(s, world):
+    passport = {"fields": [{"key": "nmck", "label": "НМЦК", "value": "4 850 000,00 руб.", "quote": "4 850 000,00",
+                            "document_id": str(world["doc"].id), "block_id": world["blocks"][5].id, "start": 0,
+                            "end": 5}]}
+    event = pipeline.set_batch_passport(s, world["batch_id"], passport)
+    assert event["meta"]["passport"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
+    assert batches.batch_view(s, world["batch_id"])["meta"]["passport"][0]["key"] == "nmck"

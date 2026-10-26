@@ -18,6 +18,7 @@
 | `index_chunks` | analysis | `ml.index_chunks(blocks, document_id=...)` | Строки таблицы `chunk` (`ChunkRecord`) с эмбеддингами и `page_from`, `page_to` |
 | Сохранение правила | API | `ml.validate_rule(rule)`, `ml.embed_rule_query(rule)` | Ошибки для 422 и `rule_version.query_embedding` |
 | `extract_batch_meta` | analysis | `ml.extract_batch_meta([(filename, blocks), ...])` | Предмет закупки или `None` |
+| `extract_passport` | analysis, параллельно с анализом | `ml.extract_passport([(document_id, filename, blocks), ...], search=PgVectorSearch(conn))` | `ProcurementPassport`: НМЦК, обеспечения, сроки поставки, приёмки и оплаты, гарантия, место поставки, дата окончания подачи заявок — у каждого значения цитата и место в документе. Пишется `db.pipeline.set_batch_passport` в `batch.meta` |
 | Старт анализа | analysis | `ml.group_rules(rules)` | Группы по 3–4 правила для chord |
 | `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов. Поиск читает все фрагменты документа и сам ранжирует их гибридом векторов и BM25 |
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
@@ -37,7 +38,7 @@
 | `extract/page_classes.py` | Классы страниц `text`, `scan`, `mixed`, `curves`, `empty` (FR-3.4) |
 | `ocr/` | Края, ориентация, наклон, линии таблиц; Tesseract `--psm 3`; перечитывание оторванных номеров пунктов; чистка; уверенность страницы (FR-3.5); кеш с версией конвейера |
 | `structure.py` | Блоки с разделами из сырых абзацев (FR-3.1, FR-4.2) и фрагменты для поиска |
-| `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки |
+| `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки, паспорт закупки |
 | `checklist/` | Стартовый чек-лист R-01…R-08 |
 
 Любая правка подготовки или чистки OCR увеличивает `PIPELINE_VERSION` в [`config.py`](config.py), иначе кеш отдаст старое распознавание.

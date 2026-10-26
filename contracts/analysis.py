@@ -146,6 +146,32 @@ class RuleGroupResult(BaseModel):
     usage: LLMUsage = Field(default_factory=LLMUsage)
 
 
+class PassportField(BaseModel):
+    """Поле паспорта закупки: значение и место в документе, откуда оно взято."""
+
+    key: str = Field(description="nmck, contract_security, delivery_term, … — список в ml.analysis.passport")
+    label: str = Field(description="Подпись для карточки: «НМЦК», «Срок поставки»")
+    value: str = Field(description="Короткое значение для карточки")
+    quote: str = Field(description="Ровно `block.text[start:end]`")
+    document_id: str
+    filename: str | None = None
+    block_id: str
+    start: int
+    end: int
+    page: int | None = None
+    section_number: str | None = None
+
+
+class ProcurementPassport(BaseModel):
+    """Паспорт закупки (`batch.meta`): ключевые условия пакета одной карточкой."""
+
+    fields: list[PassportField]
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+    def value(self, key: str) -> str | None:
+        return next((f.value for f in self.fields if f.key == key), None)
+
+
 class RuleTestFinding(BaseModel):
     quote: str
     block_id: str

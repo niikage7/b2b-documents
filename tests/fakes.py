@@ -52,9 +52,10 @@ class FakeLLM:
     только если она есть в тексте запроса — как у честной модели."""
 
     def __init__(self, plan: dict[str, list[tuple[str, str]]] | None = None, *, invent: dict | None = None,
-                 delay: float = 0.0):
+                 delay: float = 0.0, passport: dict[str, tuple[str, str]] | None = None):
         self.plan = plan or {}
         self.invent = invent or {}
+        self.passport = passport or {}
         self.delay = delay
         self.requests: list[dict] = []
 
@@ -68,6 +69,10 @@ class FakeLLM:
             m = re.search(r"Наименование объекта закупки:\s*([^\n.]+)", prompt)
             content = json.dumps({"subject": m.group(1) if m else None}, ensure_ascii=False)
             return _ok(content)
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "procurement_passport":
+            fields = [{"key": key, "value": value, "fragment": _fragment_of(prompt, quote), "quote": quote}
+                      for key, (value, quote) in self.passport.items()]
+            return _ok(json.dumps({"fields": fields}, ensure_ascii=False))
         codes = re.findall(r"^### (R-\d+)\.", prompt, re.M)
         rules = []
         for code in codes:

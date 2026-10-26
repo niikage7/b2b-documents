@@ -253,6 +253,24 @@ def set_batch_meta(s: Session, batch_id, *, subject: str | None, meta: dict | No
     return {"subject": subject, "meta": batch.meta}
 
 
+def set_batch_passport(s: Session, batch_id, passport: dict) -> dict:
+    """Паспорт закупки (`ml.extract_passport`) в `batch.meta`; предмет — из паспорта, если его ещё нет.
+
+    Возвращает данные события `batch.meta`. Паспорт можно считать параллельно с анализом:
+    правилам нужен только предмет закупки, а его даёт `extract_batch_meta`.
+    """
+    batch = s.get(Batch, as_uuid(batch_id))
+    if batch is None:
+        raise NotFound("Пакет не найден")
+    meta = dict(batch.meta or {})
+    meta["passport"] = [f for f in passport.get("fields", [])]
+    batch.meta = meta
+    if not batch.subject:
+        batch.subject = next((f["value"] for f in meta["passport"] if f.get("key") == "subject"), None)
+    s.flush()
+    return {"subject": batch.subject, "meta": batch.meta}
+
+
 def pin_batch_rules(s: Session, batch_id) -> int:
     """На старте пакета: включённые правила профиля в их текущих версиях. Повтор заменяет набор."""
     batch = s.get(Batch, as_uuid(batch_id))

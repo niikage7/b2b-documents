@@ -148,3 +148,25 @@ def test_batch_meta_llm_fallback_and_none():
     assert fake.requests and fake.requests[0]["response_format"]["json_schema"]["name"] == "batch_meta"
     # Короткий вызов идёт без рассуждений, даже если они включены для анализа
     assert fake.requests[0]["reasoning"] == {"effort": "none"}
+
+
+def test_passport_anchors_values_and_drops_invented(tmp_path, contract_blocks):
+    from ml.analysis.passport import extract_passport
+
+    notice = blocks_from_extraction(extract_docx(make_notice_docx(tmp_path / "Извещение.docx")))
+    fake = FakeLLM(passport={
+        "nmck": ("4 850 000,00 руб.", "Начальная (максимальная) цена контракта: 4 850 000,00 рублей"),
+        "delivery_term": ("3 календарных дня с даты заключения", "в течение 3 (трёх) календарных дней с даты заключения"),
+        "advance": ("30 %", "Аванс составляет 30 процентов"),  # такого текста нет — поле отбрасывается
+        "unknown": ("x", "Аванс по Контракту не предусмотрен"),  # неизвестное поле
+    })
+    passport = extract_passport([("n", "Извещение.docx", notice), ("c", "Контракт.docx", contract_blocks)],
+                                llm=fake.client(), embedder=EMBEDDER)
+    assert [f.key for f in passport.fields] == ["nmck", "delivery_term"]  # порядок карточки, а не ответа
+    nmck, delivery = passport.fields
+    assert nmck.document_id == "n" and nmck.filename == "Извещение.docx" and nmck.value == "4 850 000,00 руб."
+    block = next(b for b in contract_blocks if b.id == delivery.block_id)
+    assert block.text[delivery.start:delivery.end] == delivery.quote and delivery.section_number
+    assert passport.value("nmck") == "4 850 000,00 руб." and passport.value("advance") is None
+    prompt = fake.requests[0]["messages"][-1]["content"]
+    assert "Гарантийный срок на Товар" in prompt and "Размер обеспечения исполнения" in prompt

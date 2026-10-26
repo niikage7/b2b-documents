@@ -29,6 +29,7 @@ _EXPORTS = {
     "rule_query_text": "ml.analysis.templates",
     "test_rule": "ml.analysis.rule_test",
     "extract_batch_meta": "ml.analysis.batch_meta",
+    "extract_passport": "ml.analysis.passport",
     "load_default_checklist": "ml.checklist",
     "build_structure": "ml.structure",
     "build_chunks": "ml.structure",
