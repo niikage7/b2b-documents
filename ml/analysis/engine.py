@@ -3,7 +3,8 @@
 Движок ничего не знает о конкретных правилах: правило — данные (инструкция, переменные,
 уровень, тип). Два типа:
 
-- `semantic_llm` — для каждого правила top-k фрагментов по строке «название + описание»,
+- `semantic_llm` — для каждого правила фрагменты документа в пределах бюджета токенов,
+  отобранные гибридным поиском (`ml.analysis.search`) по строке «название + описание»;
   фрагменты всех правил группы объединяются, один вызов LLM на группу;
 - `llm` — весь документ окнами около 6000 токенов, один вызов на окно и группу.
 
@@ -32,8 +33,8 @@ from ml.analysis.blocks import BlockLike, Fragment, estimate_tokens
 from ml.analysis.embeddings import Embedder, embed_texts
 from ml.analysis.llm import LLMClient, default_client
 from ml.analysis.prompts import group_prompt
-from ml.analysis.search import ChunkSearch
-from ml.analysis.templates import rule_query_text
+from ml.analysis.search import ChunkSearch, LexicalIndex, rank_chunks, take_budget
+from ml.analysis.templates import rule_query_text, rule_search_text
 from ml.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -83,9 +84,13 @@ def _semantic_call(
     document_id: str,
     search: ChunkSearch,
     embedder: Embedder | None,
-    top_k: int,
+    budget_tokens: int,
 ) -> _Call | None:
     known = {b.id for b in ordered}
+    chunks = search.chunks(document_id)
+    if not chunks:
+        return None
+    lexical = LexicalIndex([c.text for c in chunks])
     missing = [r for r in rules if not r.query_embedding]
     vectors = dict(zip(
         [r.code for r in missing],
@@ -95,9 +100,9 @@ def _semantic_call(
     per_rule: dict[str, set[str]] = {}
     for rule in rules:
         vector = rule.query_embedding or vectors[rule.code]
-        hits = search.search(document_id, vector, top_k)
+        hits = take_budget(rank_chunks(chunks, vector, rule_search_text(rule), lexical=lexical), budget_tokens)
         per_rule[rule.code] = {bid for hit in hits for bid in hit.block_ids if bid in known}
-        log.debug("analysis: %s: найдено фрагментов %d", rule.code, len(hits))
+        log.debug("analysis: %s: фрагментов %d из %d", rule.code, len(hits), len(chunks))
     selected = set().union(*per_rule.values()) if per_rule else set()
     if not selected:
         return None
@@ -137,18 +142,19 @@ def analyze_rule_group(
     llm: LLMClient | None = None,
     embedder: Embedder | None = None,
     progress: ProgressFn | None = None,
-    top_k: int | None = None,
+    budget_tokens: int | None = None,
     window_tokens: int | None = None,
 ) -> RuleGroupResult:
     """Проверяет документ группой правил и возвращает кандидатов в находки.
 
     `blocks` — все блоки документа (поля из «Требований к бэкенду»), `search` и
     `document_id` нужны для `semantic_llm`; без них такие правила читают документ окнами.
+    `budget_tokens` — сколько текста найденных фрагментов получает каждое правило.
     Ничего не пишет в БД: результат сохраняет `merge_findings`.
     """
     settings = get_settings()
     llm = llm or default_client()
-    top_k = top_k or settings.search_top_k
+    budget_tokens = budget_tokens or settings.search_budget_tokens
     window_tokens = window_tokens or settings.llm_window_tokens
     ordered = sorted(blocks, key=lambda b: b.order)
     active = [r for r in rules if r.enabled]
@@ -163,7 +169,7 @@ def analyze_rule_group(
     call = None
     if semantic and search is not None and document_id is not None:
         call = _semantic_call(semantic, ordered, document_id=document_id, search=search,
-                              embedder=embedder, top_k=top_k)
+                              embedder=embedder, budget_tokens=budget_tokens)
     if call is not None:
         calls.append(call)
     elif semantic:

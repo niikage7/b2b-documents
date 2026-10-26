@@ -9,11 +9,11 @@ import pytest
 from bench.pipeline import _modes, _totals
 from contracts.analysis import FindingCandidate, LLMGroupResponse, LLMUsage, RuleSpec, RuleVariable
 from ml.analysis.anchor import anchor_quote, prepare_quote
-from ml.analysis.blocks import SimpleBlock, blocks_from_text, chunk_blocks
+from ml.analysis.blocks import Chunk, SimpleBlock, blocks_from_text, chunk_blocks, estimate_tokens
 from ml.analysis.cache import DirCache
 from ml.analysis.llm import reasoning_effort
-from ml.analysis.search import PgVectorSearch
-from ml.analysis.templates import render_template, rule_query_text, validate_rule
+from ml.analysis.search import LexicalIndex, PgVectorSearch, lexical_terms, rank_chunks, take_budget
+from ml.analysis.templates import render_template, rule_query_text, rule_search_text, validate_rule
 from ml.checklist import load_default_checklist
 from ml.errors import LLMError, LLMResponseError, RuleTemplateError
 from tests.fakes import _ok, make_client
@@ -128,9 +128,47 @@ def test_blocks_from_text_and_chunks():
     assert [(b.number, b.text) for b in blocks] == [
         ("1.", "Общие положения"), ("1.1.", "Текст пункта."), (None, "Абзац без номера."), ("а)", "подпункт")]
     long = [SimpleBlock(f"b{i}", i, "слово " * 200) for i in range(5)]
-    chunks = chunk_blocks(long, max_tokens=400)
+    chunks = chunk_blocks(long, max_tokens=400, overlap=1)
     assert all(len(c.block_ids) <= 2 for c in chunks)
     assert chunks[1].block_ids[0] == chunks[0].block_ids[-1]  # перекрытие в один блок
+    # По умолчанию — без перекрытия: длинный блок — свой фрагмент, короткие склеиваются
+    short = [SimpleBlock("h", 0, "Ответственность сторон", number="7.", section_title="Ответственность сторон"),
+             SimpleBlock("p1", 1, "Пеня начисляется за каждый день просрочки.", number="7.1.",
+                         section_title="Ответственность сторон"),
+             SimpleBlock("p2", 2, "слово " * 200, number="7.2.", section_title="Ответственность сторон")]
+    chunks = chunk_blocks(short, max_tokens=80, overlap=0)
+    assert [c.block_ids for c in chunks] == [["h", "p1"], ["p2"]]
+    # Название раздела в начале фрагмента, если фрагмент начинается не с заголовка
+    assert chunks[0].text.startswith("7. Ответственность") and chunks[1].text.startswith("Ответственность сторон\n7.2.")
+
+
+def test_lexical_index_and_hybrid_rank():
+    texts = [
+        "Поставщик уплачивает пеню в размере 1 % цены контракта за каждый день просрочки.",
+        "Стороны обмениваются документами в единой информационной системе.",
+        "Размер обеспечения исполнения контракта составляет 30 % начальной цены.",
+    ]
+    assert lexical_terms("Обеспечения исполнения ёмкость и в") == ["обесп", "испол", "емкос"]
+    scores = LexicalIndex(texts).scores("обеспечение исполнения контракта")
+    assert max(range(3), key=lambda i: scores[i]) == 2 and scores[1] == 0
+    chunks = [Chunk(f"c{i}", [f"b{i}"], t, embedding=v) for i, (t, v) in
+              enumerate(zip(texts, ([1.0, 0.0], [0.9, 0.1], [0.0, 1.0]), strict=True))]
+    # Вектор указывает на c0, слова — на c2: гибрид ставит их выше c1, у которого нет ни того, ни другого
+    hybrid = rank_chunks(chunks, [1.0, 0.0], "обеспечение исполнения", mode="hybrid")
+    assert {h.chunk_id for h in hybrid[:2]} == {"c0", "c2"} and hybrid[-1].chunk_id == "c1"
+    assert rank_chunks(chunks, [1.0, 0.0], "обеспечение", mode="dense")[0].chunk_id == "c0"
+    assert rank_chunks(chunks, [1.0, 0.0], "обеспечение", mode="lexical")[0].chunk_id == "c2"
+    # Бюджет: первый фрагмент всегда, дальше — пока укладываются
+    assert len(take_budget(hybrid, 1)) == 1 and len(take_budget(hybrid, 10_000)) == 3
+    assert len(take_budget(hybrid, estimate_tokens(hybrid[0].text) + estimate_tokens(hybrid[1].text))) == 2
+
+
+def test_rule_search_text_includes_instruction():
+    r = rule(prompt_template="Найди в {фрагмент} пени больше {порог} % для {предмет_закупки}.",
+             variables=[RuleVariable(name="порог", type="number", value="10")])
+    text = rule_search_text(r)
+    assert text.startswith(rule_query_text(r)) and "пени больше 10 %" in text
+    assert "{" not in text and "фрагмент" not in text
 
 
 def test_pgvector_search_sql():
@@ -148,7 +186,7 @@ def test_pgvector_search_sql():
             self.executed = (sql, params)
 
         def fetchall(self):
-            return [("c1", ["b1", "b2"], "текст", 0.91)]
+            return [("c1", ["b1", "b2"], "текст", "[0.1,0.2]"), ("c2", ["b3"], "без вектора", None)]
 
     cursor = Cursor()
 
@@ -156,11 +194,13 @@ def test_pgvector_search_sql():
         def cursor(self):
             return cursor
 
-    hits = PgVectorSearch(Conn()).search("doc-1", [0.1, 0.2], 8)
+    chunks = PgVectorSearch(Conn()).chunks("doc-1")
     sql, params = cursor.executed
-    assert "WHERE document_id = %(document_id)s" in sql and "LIMIT %(k)s" in sql
-    assert params == {"document_id": "doc-1", "vector": "[0.1,0.2]", "k": 8}
-    assert hits[0].block_ids == ["b1", "b2"] and hits[0].score == 0.91
+    assert "WHERE document_id = %(document_id)s" in sql and params == {"document_id": "doc-1"}
+    assert chunks[0].block_ids == ["b1", "b2"] and chunks[0].embedding == [0.1, 0.2]
+    assert chunks[1].embedding is None
+    hits = rank_chunks(chunks, [0.1, 0.2], "текст")
+    assert hits[0].chunk_id == "c1"
     with pytest.raises(ValueError):
         PgVectorSearch(Conn(), table="chunk; drop table x")
 

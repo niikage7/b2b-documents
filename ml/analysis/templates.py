@@ -100,3 +100,14 @@ def rule_query_text(rule: RuleSpec) -> str:
         return _value(rule, name) or ""
 
     return re.sub(r"\s+", " ", _VAR.sub(repl, text)).strip()
+
+
+def rule_search_text(rule: RuleSpec) -> str:
+    """Строка лексического поиска (BM25): название, описание и инструкция правила.
+
+    В инструкции методолог перечисляет термины, по которым узнаётся условие («пеня»,
+    «ключевая ставка», «обеспечение заявки»), — для поиска по словам они важнее описания.
+    """
+    instruction = _VAR.sub(lambda m: "" if m.group(1) in SYSTEM_VARIABLES else (_value(rule, m.group(1)) or ""),
+                           rule.prompt_template)
+    return re.sub(r"\s+", " ", f"{rule_query_text(rule)} {instruction}").strip()

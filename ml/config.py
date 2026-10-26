@@ -87,7 +87,14 @@ class Settings:
 
     # Движок правил
     rules_per_group: int = field(default_factory=lambda: _env_int("RULES_PER_GROUP", 4))
-    search_top_k: int = field(default_factory=lambda: _env_int("SEARCH_TOP_K", 8))
+    # Поиск фрагментов для semantic_llm (docs/ml-plan.md, «Поиск фрагментов 27.10»): фрагменты по
+    # CHUNK_TOKENS (около одного пункта договора), гибрид векторов и BM25, каждому правилу — до
+    # SEARCH_BUDGET_TOKENS текста. На стенде с рассыпанными пунктами: 0,99–1,00 пунктов с риском против 0,60.
+    # Бюджет 3200 — столько же, сколько давали прежние top-8 фрагментов по 400 токенов
+    chunk_tokens: int = field(default_factory=lambda: _env_int("CHUNK_TOKENS", 60))
+    chunk_overlap: int = field(default_factory=lambda: _env_int("CHUNK_OVERLAP", 0))
+    search_mode: str = field(default_factory=lambda: _env("SEARCH_MODE", "hybrid"))
+    search_budget_tokens: int = field(default_factory=lambda: _env_int("SEARCH_BUDGET_TOKENS", 3200))
     llm_window_tokens: int = field(default_factory=lambda: _env_int("LLM_WINDOW_TOKENS", 6000))
     quote_min_score: float = field(default_factory=lambda: _env_float("QUOTE_MIN_SCORE", 90))
     test_rule_timeout: float = field(default_factory=lambda: _env_float("TEST_RULE_TIMEOUT", 60))

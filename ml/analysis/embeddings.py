@@ -25,6 +25,8 @@ _PREFIXES: list[tuple[str, tuple[str, str]]] = [
     ("e5", ("query: ", "passage: ")),
     ("frida", ("search_query: ", "search_document: ")),
     ("berta", ("search_query: ", "search_document: ")),
+    ("user2", ("search_query: ", "search_document: ")),
+    ("deepvk/user-base", ("query: ", "passage: ")),
     ("giga-embeddings", ("Instruct: Найди фрагмент договора по описанию риска\nQuery: ", "")),
 ]
 
@@ -47,7 +49,7 @@ class SentenceTransformerEmbedder:
     """Обёртка sentence-transformers: нормированные векторы, батчинг, префиксы модели."""
 
     def __init__(self, model: str | None = None, *, device: str | None = None, batch_size: int | None = None,
-                 dim: int | None = None):
+                 dim: int | None = None, check_dim: bool = True):
         settings = get_settings()
         self.model_name = model or settings.embedding_model
         self.device = device or settings.embedding_device
@@ -56,6 +58,8 @@ class SentenceTransformerEmbedder:
         self._model = None
         self._lock = threading.Lock()
         self.dim = dim or settings.embedding_dim
+        # Стенды сравнивают модели разной размерности: им проверка схемы не нужна
+        self.check_dim = check_dim
 
     def _load(self):
         with self._lock:
@@ -65,7 +69,9 @@ class SentenceTransformerEmbedder:
                 self._model = SentenceTransformer(self.model_name, device=self.device)
                 get_dim = getattr(self._model, "get_embedding_dimension", None) or self._model.get_sentence_embedding_dimension
                 dim = get_dim()
-                if dim != self.dim:
+                if not self.check_dim:
+                    self.dim = dim
+                elif dim != self.dim:
                     raise ValueError(f"Модель {self.model_name} даёт векторы {dim}, а в схеме vector({self.dim})")
                 log.info("embeddings: загружена %s (%d)", self.model_name, dim)
         return self._model

@@ -52,7 +52,7 @@ def test_full_checklist_finds_planted_risks(contract_blocks, search):
     candidates, dropped, checked = [], [], []
     for group in group_rules(rules):
         result = analyze_rule_group(contract_blocks, group, subject=SUBJECT, document_id="doc", search=search,
-                                    llm=llm, embedder=EMBEDDER, top_k=8)
+                                    llm=llm, embedder=EMBEDDER)
         candidates += result.candidates
         dropped += result.dropped
         checked += result.checked_rules

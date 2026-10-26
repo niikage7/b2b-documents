@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from contracts.extraction import ExtractionResult
+from ml.config import get_settings
 
 CHARS_PER_TOKEN = 3.5
 """Оценка для русского текста у современных токенизаторов: 3–4 знака на токен."""
@@ -67,8 +68,8 @@ class Fragment:
 
 
 def section_of(block: BlockLike) -> str | None:
-    """Номер пункта для показа модели и в ответе `test_rule`: свой номер или раздел блока."""
-    return getattr(block, "number", None) or getattr(block, "section_number", None)
+    """Номер пункта для ссылки на место: раздел блока («3.2 а)»), иначе его собственный номер."""
+    return getattr(block, "section_number", None) or getattr(block, "number", None)
 
 
 _SPLIT = re.compile(r"\n\s*\n|\n(?=\s*(?:\d{1,3}(?:\.\d{1,3})*[.)]|[а-яa-z]\))\s)")
@@ -94,23 +95,23 @@ def blocks_from_text(text: str, *, prefix: str = "t") -> list[SimpleBlock]:
     return blocks
 
 
-def blocks_from_extraction(result: ExtractionResult, *, prefix: str = "b") -> list[SimpleBlock]:
-    """Сырые абзацы → блоки без иерархии разделов: для стендов и тестов движка."""
-    blocks: list[SimpleBlock] = []
-    section = None
-    title = None
-    for item in result.paragraphs:
-        if item.number:
-            section = item.number
-        if item.heading_level:
-            title = item.text
-        blocks.append(SimpleBlock(id=f"{prefix}{item.order}", order=item.order, text=item.text, number=item.number,
-                                  page=item.page, section_number=section, section_title=title))
-    return blocks
+def blocks_from_extraction(result: ExtractionResult, *, document_id: str | None = None):
+    """Сырые абзацы → блоки с разделами: то же, что этап `build_structure`, для стендов и тестов."""
+    from ml.structure import build_structure
+
+    return build_structure(result, document_id=document_id)
 
 
-def chunk_blocks(blocks: Sequence[BlockLike], *, max_tokens: int = 400, prefix: str = "c") -> list[Chunk]:
-    """Фрагменты по 300–500 токенов по границам блоков с перекрытием в один блок."""
+def chunk_blocks(blocks: Sequence[BlockLike], *, max_tokens: int | None = None, prefix: str = "c",
+                 overlap: int | None = None) -> list[Chunk]:
+    """Фрагменты до `max_tokens` по границам блоков с перекрытием в `overlap` блоков.
+
+    По умолчанию — `CHUNK_TOKENS` и `CHUNK_OVERLAP`: фрагмент размером с пункт договора,
+    короткие блоки (заголовок, подпункт) склеиваются с соседними, длинный блок — один фрагмент.
+    """
+    settings = get_settings()
+    max_tokens = max_tokens or settings.chunk_tokens
+    overlap = settings.chunk_overlap if overlap is None else overlap
     chunks: list[Chunk] = []
     current: list[BlockLike] = []
     tokens = 0
@@ -118,8 +119,8 @@ def chunk_blocks(blocks: Sequence[BlockLike], *, max_tokens: int = 400, prefix: 
         t = estimate_tokens(block.text)
         if current and tokens + t > max_tokens:
             chunks.append(_chunk(current, f"{prefix}{len(chunks)}"))
-            current = current[-1:]
-            tokens = estimate_tokens(current[0].text)
+            current = current[-overlap:] if overlap else []
+            tokens = sum(estimate_tokens(b.text) for b in current)
         current.append(block)
         tokens += t
     if current:
@@ -129,4 +130,8 @@ def chunk_blocks(blocks: Sequence[BlockLike], *, max_tokens: int = 400, prefix: 
 
 def _chunk(blocks: list[BlockLike], chunk_id: str) -> Chunk:
     text = "\n".join(f"{section_of(b)} {b.text}" if section_of(b) else b.text for b in blocks)
+    # Название раздела в начале фрагмента: короткий пункт без него теряет тему для поиска
+    title = getattr(blocks[0], "section_title", None)
+    if title and title != blocks[0].text:
+        text = f"{title}\n{text}"
     return Chunk(id=chunk_id, block_ids=[b.id for b in blocks], text=text)

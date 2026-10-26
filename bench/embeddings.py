@@ -1,40 +1,62 @@
-"""Стенд выбора bi-encoder: находит ли строка поиска правила блок с ожидаемой цитатой.
+"""Стенд выбора bi-encoder: находит ли строка поиска правила текст с риском.
 
-Для каждой ожидаемой находки (`bench.samples.EXPECTED` или свой JSON) запрос — строка
-поиска правила («название + описание»), кандидаты — блоки того же документа. Метрики —
-recall@k (есть ли нужный блок в первых k) и MRR, плюс скорость кодирования на CPU.
+Запрос — строка поиска правила («название + описание», `rule_query_text`), как у
+`semantic_llm` в анализе. Два набора:
 
-    python -m bench.embeddings intfloat/multilingual-e5-base deepvk/USER-bge-m3 sergeyzh/BERTA
+- `clauses` (по умолчанию) — пункты из `bench.clauses`, перемешанные со служебными в документ
+  нужной длины и нарезанные `chunk_blocks`, как в `index_chunks`. Для каждого правила
+  `semantic_llm` и режима поиска (векторный, BM25, гибрид) считается доля пунктов с риском
+  в фрагментах, которые правило получает при бюджете токенов, и сколько токенов нужно, чтобы
+  найти все пункты с риском: по нему видно, хватает ли `SEARCH_BUDGET_TOKENS`. Пункты с
+  риском рассыпаны по документу — это труднее, чем в настоящем договоре, где условия одной
+  темы стоят в одном разделе;
+- `package` — синтетический пакет `bench.samples` и ожидаемые цитаты `EXPECTED`, поиск по
+  блокам: recall@k блока с цитатой и MRR.
 
-Свой эталон: `--expected file.json` со списком {"rule", "doc", "quote"} и `--doc имя=путь`.
-Модели скачиваются с Hugging Face при первом запуске.
+    python -m bench.embeddings intfloat/multilingual-e5-base sergeyzh/BERTA deepvk/USER2-base
+    python -m bench.embeddings intfloat/multilingual-e5-base --chunk-tokens 60,100,400
+    python -m bench.embeddings deepvk/USER-bge-m3 --pages 40
+    python -m bench.embeddings intfloat/multilingual-e5-base --set package
+
+Свой эталон для `package`: `--expected file.json` со списком {"rule", "doc", "quote"} и
+`--doc имя=путь`. Модели скачиваются с Hugging Face при первом запуске. Размерность
+не проверяется: стенд сравнивает и модели не на 768, схему тогда нужно менять.
 """
 
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
+import random
+import statistics
 import tempfile
 import time
 from pathlib import Path
 
 from ml.analysis.anchor import normalize_map
-from ml.analysis.blocks import blocks_from_extraction
+from ml.analysis.blocks import SimpleBlock, blocks_from_extraction, chunk_blocks, estimate_tokens
 from ml.analysis.embeddings import SentenceTransformerEmbedder
-from ml.analysis.templates import rule_query_text
+from ml.analysis.search import LexicalIndex, rank_chunks, take_budget
+from ml.analysis.templates import rule_query_text, rule_search_text
 from ml.checklist import load_default_checklist
-from ml.extract import extract_document
+from ml.config import get_settings
 
 KS = (1, 3, 5, 8)
+BUDGETS = (800, 1600, 3200)
+MODES = ("dense", "lexical", "hybrid")
+CLAUSES_PER_PAGE = 20
 
 
 def _contains(block_text: str, quote: str) -> bool:
     return normalize_map(quote)[0] in normalize_map(block_text)[0]
 
 
-def evaluate(model: str, docs: dict[str, list], expected: list[dict], dim: int | None) -> dict:
-    embedder = SentenceTransformerEmbedder(model, dim=dim)
-    embedder.embed(["прогрев"], "passage")  # загрузка модели не входит в замер скорости
+def _dot(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b, strict=True))
+
+
+def evaluate_package(embedder: SentenceTransformerEmbedder, docs: dict[str, list], expected: list[dict]) -> dict:
     _, rules = load_default_checklist()
     rules = {r.code: r for r in rules}
     started = time.perf_counter()
@@ -46,7 +68,7 @@ def evaluate(model: str, docs: dict[str, list], expected: list[dict], dim: int |
     for item in expected:
         blocks = docs[item["doc"]]
         query = embedder.embed([rule_query_text(rules[item["rule"]])], "query")[0]
-        scores = [sum(a * b for a, b in zip(query, v, strict=True)) for v in vectors[item["doc"]]]
+        scores = [_dot(query, v) for v in vectors[item["doc"]]]
         ranking = sorted(range(len(blocks)), key=lambda i: -scores[i])
         relevant = {i for i, b in enumerate(blocks) if _contains(b.text, item["quote"])}
         rank = next((pos + 1 for pos, i in enumerate(ranking) if i in relevant), None)
@@ -56,21 +78,116 @@ def evaluate(model: str, docs: dict[str, list], expected: list[dict], dim: int |
                 hits[k] += rank <= k
     n = len(expected)
     return {
-        "model": model,
         **{f"recall@{k}": hits[k] / n for k in KS},
         "mrr": rr / n,
-        "blocks_per_s": n_blocks / encode if encode else 0.0,
+        "per_s": n_blocks / encode if encode else 0.0,
     }
+
+
+def clauses_document(pages: int, seed: int) -> tuple[list[SimpleBlock], dict[str, frozenset[str]]]:
+    """Пункты `bench.clauses` и служебные пункты в случайном порядке: около 20 пунктов на страницу."""
+    from bench.clauses import CLAUSES, package_clauses
+    from bench.samples import FILLER
+
+    items = [(c.text, c.rules) for c in CLAUSES]
+    items += [(c.text, c.rules) for c in package_clauses()]
+    filler = itertools.cycle([i.text for i in FILLER if i.level > 0])
+    while len(items) < pages * CLAUSES_PER_PAGE:
+        items.append((next(filler), frozenset()))
+    random.Random(seed).shuffle(items)
+    blocks = [SimpleBlock(id=f"b{i}", order=i, text=text, number=f"{i + 1}.", page=i // CLAUSES_PER_PAGE + 1)
+              for i, (text, _) in enumerate(items)]
+    labels = {b.id: rules for b, (_, rules) in zip(blocks, items, strict=True)}
+    return blocks, labels
+
+
+def evaluate_clauses(embedder: SentenceTransformerEmbedder, blocks: list[SimpleBlock],
+                     labels: dict[str, frozenset[str]], *, chunk_tokens: int, overlap: int,
+                     modes: tuple[str, ...]) -> dict:
+    """Доля пунктов с риском в фрагментах, которые правило получает при каждом бюджете токенов."""
+    _, rules = load_default_checklist()
+    rules = [r for r in rules if r.kind == "semantic_llm"]
+    chunks = chunk_blocks(blocks, max_tokens=chunk_tokens, overlap=overlap)
+    started = time.perf_counter()
+    for chunk, vector in zip(chunks, embedder.embed([c.text for c in chunks], "passage"), strict=True):
+        chunk.embedding = vector
+    encode = time.perf_counter() - started
+    lexical = LexicalIndex([c.text for c in chunks])
+    out: dict = {"chunks": len(chunks), "per_s": len(chunks) / encode if encode else 0.0}
+    for mode in modes:
+        covered = {b: 0 for b in BUDGETS}
+        total = 0
+        need: dict[str, int] = {}
+        for rule in rules:
+            risky = {bid for bid, codes in labels.items() if rule.code in codes}
+            if not risky:
+                continue
+            vector = embedder.embed([rule_query_text(rule)], "query")[0]
+            hits = rank_chunks(chunks, vector, rule_search_text(rule), mode=mode, lexical=lexical)
+            for budget in BUDGETS:
+                got = {bid for h in take_budget(hits, budget) for bid in h.block_ids}
+                covered[budget] += len(risky & got)
+            seen: set[str] = set()
+            used = 0
+            for hit in hits:
+                seen |= risky & set(hit.block_ids)
+                used += estimate_tokens(hit.text)
+                if seen == risky:
+                    break
+            need[rule.code] = used
+            total += len(risky)
+        out[mode] = {
+            **{f"recall@{b}": covered[b] / total for b in BUDGETS},
+            "need_median": statistics.median(need.values()),
+            "need_max": max(need.values()),
+        }
+    return out
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("models", nargs="+")
-    parser.add_argument("--expected", type=Path, help="JSON со списком {rule, doc, quote}")
+    parser.add_argument("--set", choices=("clauses", "package"), default="clauses")
+    parser.add_argument("--pages", type=int, default=20, help="длина документа для набора clauses")
+    parser.add_argument("--seeds", type=int, default=3, help="сколько перемешиваний усреднять для clauses")
+    parser.add_argument("--chunk-tokens", default=str(get_settings().chunk_tokens),
+                        help="размеры фрагмента через запятую, например 60,100,400")
+    parser.add_argument("--overlap", type=int, default=get_settings().chunk_overlap, help="перекрытие фрагментов, блоков")
+    parser.add_argument("--expected", type=Path, help="JSON со списком {rule, doc, quote} для набора package")
     parser.add_argument("--doc", action="append", default=[], help="имя=путь к документу для своего эталона")
-    parser.add_argument("--dim", type=int, help="размерность, если модель не 768 (только для сравнения)")
     args = parser.parse_args()
+
+    rows = []
+    if args.set == "clauses":
+        documents = [clauses_document(args.pages, seed) for seed in range(args.seeds)]
+        sizes = [int(x) for x in args.chunk_tokens.split(",")]
+        for model in args.models:
+            embedder = SentenceTransformerEmbedder(model, check_dim=False)
+            started = time.perf_counter()
+            embedder.embed(["прогрев"], "passage")  # загрузка модели не входит в замер скорости
+            load = time.perf_counter() - started
+            for size in sizes:
+                runs = [evaluate_clauses(embedder, blocks, labels, chunk_tokens=size, overlap=args.overlap,
+                                         modes=MODES) for blocks, labels in documents]
+                rows.append((model, size, runs, load))
+        print(f"Документ: {args.pages} стр.; перемешиваний: {args.seeds}; правила semantic_llm; "
+              f"перекрытие фрагментов {args.overlap} блок.\n"
+              "Доля пунктов с риском в фрагментах, отобранных при бюджете токенов на правило; "
+              "«всех» — сколько токенов нужно, чтобы найти все пункты с риском правила\n")
+        print(f"{'модель':<38}{'фрагм.':>7}{'режим':>9}" + "".join(f"{'B' + str(b):>7}" for b in BUDGETS)
+              + f"{'всех, мед.':>12}{'всех, макс.':>13}{'фрагм./с':>10}{'загр., с':>10}")
+        for model, size, runs, load in rows:
+            for mode in MODES:
+                avg = {key: statistics.mean(r[mode][key] for r in runs) for key in runs[0][mode]}
+                print(f"{model:<38}{size:>7}{mode:>9}" + "".join(f"{avg[f'recall@{b}']:>7.2f}" for b in BUDGETS)
+                      + f"{avg['need_median']:>12.0f}{max(r[mode]['need_max'] for r in runs):>13}"
+                      + f"{statistics.mean(r['per_s'] for r in runs):>10.1f}{load:>10.1f}")
+        print("\nПункты синтетические, рассыпаны по документу случайно; решение проверить на своих пакетах")
+        return
+
     with tempfile.TemporaryDirectory() as tmp:
+        from ml.extract import extract_document
+
         if args.expected:
             expected = json.loads(args.expected.read_text())
             paths = dict(item.split("=", 1) for item in args.doc)
@@ -80,13 +197,17 @@ def main() -> None:
             expected = EXPECTED
             paths = {"contract": make_contract_docx(Path(tmp) / "c.docx"), "notice": make_notice_docx(Path(tmp) / "n.docx")}
         docs = {name: blocks_from_extraction(extract_document(path)) for name, path in paths.items()}
-        rows = [evaluate(model, docs, expected, args.dim) for model in args.models]
+        for model in args.models:
+            embedder = SentenceTransformerEmbedder(model, check_dim=False)
+            embedder.embed(["прогрев"], "passage")
+            rows.append((model, evaluate_package(embedder, docs, expected), 0.0))
     header = f"{'модель':<55}" + "".join(f"{'R@' + str(k):>7}" for k in KS) + f"{'MRR':>7}{'блок/с':>9}"
     print(header)
-    for row in rows:
-        print(f"{row['model']:<55}" + "".join(f"{row[f'recall@{k}']:>7.2f}" for k in KS)
-              + f"{row['mrr']:>7.2f}{row['blocks_per_s']:>9.1f}")
-    print(f"\nзапросов: {len(expected)}; эталон синтетический, решение — по своим пакетам" if not args.expected else "")
+    for model, row, _ in rows:
+        print(f"{model:<55}" + "".join(f"{row[f'recall@{k}']:>7.2f}" for k in KS)
+              + f"{row['mrr']:>7.2f}{row['per_s']:>9.1f}")
+    if not args.expected:
+        print(f"\nзапросов: {len(expected)}; эталон синтетический, решение — по своим пакетам")
 
 
 if __name__ == "__main__":

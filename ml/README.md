@@ -14,11 +14,12 @@
 | `extract_text`, PDF | ingest | `ml.plan_pdf(path)` | Классы страниц (`PageInfo`) и `needs_ocr` у страниц для OCR |
 | `ocr_pages` | ocr | `ml.ocr_pages(path, pages, progress=..., images_dir=...)` | `OcrPage` на страницу: только слова с рамками и уверенностью |
 | После всех групп OCR | ingest | `ml.build_pdf_result(path, plan, ocr)` | `ExtractionResult`: абзацы собираются один раз, иначе абзац на границе групп разорвётся |
-| `index_chunks` | analysis | `ml.embed_texts(texts)` | Векторы фрагментов (`passage`) |
+| `build_structure` | ingest | `ml.build_structure(result, document_id=...)` | Блоки (`contracts.document.Block`) с `section_number`, `section_title`, `section_block_id`; `id` детерминированы — повтор этапа даёт те же блоки |
+| `index_chunks` | analysis | `ml.index_chunks(blocks, document_id=...)` | Строки таблицы `chunk` (`ChunkRecord`) с эмбеддингами и `page_from`, `page_to` |
 | Сохранение правила | API | `ml.validate_rule(rule)`, `ml.embed_rule_query(rule)` | Ошибки для 422 и `rule_version.query_embedding` |
 | `extract_batch_meta` | analysis | `ml.extract_batch_meta([(filename, blocks), ...])` | Предмет закупки или `None` |
 | Старт анализа | analysis | `ml.group_rules(rules)` | Группы по 3–4 правила для chord |
-| `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов |
+| `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов. Поиск читает все фрагменты документа и сам ранжирует их гибридом векторов и BM25 |
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
 | Сид БД | — | `ml.load_default_checklist()` | Профиль «44-ФЗ, поставка товаров» и правила R-01…R-08 |
 
@@ -35,7 +36,8 @@
 | `extract/pdf_*.py`, `extract/layout.py` | Строки по геометрии, колонки XY-сечением, колонтитулы, знаки сносок, битый текстовый слой, номер пункта по шаблону, склейка абзаца через страницу |
 | `extract/page_classes.py` | Классы страниц `text`, `scan`, `mixed`, `curves`, `empty` (FR-3.4) |
 | `ocr/` | Края, ориентация, наклон, линии таблиц; Tesseract `--psm 3`; перечитывание оторванных номеров пунктов; чистка; уверенность страницы (FR-3.5); кеш с версией конвейера |
-| `analysis/` | Шаблоны и переменные правил, эмбеддинги, поиск по pgvector, адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки |
+| `structure.py` | Блоки с разделами из сырых абзацев (FR-3.1, FR-4.2) и фрагменты для поиска |
+| `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки |
 | `checklist/` | Стартовый чек-лист R-01…R-08 |
 
 Любая правка подготовки или чистки OCR увеличивает `PIPELINE_VERSION` в [`config.py`](config.py), иначе кеш отдаст старое распознавание.
@@ -55,7 +57,7 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Точность OCR | `python -m bench.ocr_cer [pdf ...]` | 1 − CER на «качественных сканах», сгенерированных из PDF с текстовым слоем; правила нормализации — в начале файла |
 | Генератор сканов | `python -m bench.scangen src.pdf scan.pdf` | Скан 300 dpi: серый фон, наклон до 0,6°, шум, JPEG |
 | Нумерация DOCX | `python -m bench.numbering file.docx` | Расхождения наших номеров с рендером LibreOffice |
-| Выбор bi-encoder | `python -m bench.embeddings model ...` | recall@k и MRR поиска блока с ожидаемой цитатой, скорость на CPU |
+| Выбор bi-encoder и поиска | `python -m bench.embeddings model ... [--chunk-tokens 60,100,400]` | Доля пунктов с риском в фрагментах правила при бюджете токенов: векторный поиск, BM25, гибрид; скорость на CPU |
 | Сквозной прогон | `python -m bench.pipeline --pages 20 --scan` | Время этапов, находки, полнота и точность по правилам, токены и стоимость |
 | Рассуждения модели | `python -m bench.pipeline --pages 20 --reasoning default,low,none --repeat 3` | Время анализа, токены рассуждений, стоимость, полнота и точность в каждом режиме `LLM_REASONING`; без кеша LLM, режимы чередуются |
 | Модели решений и LLM | `python -m bench.decisions [--context 4] [--variant prompt,desc]` | Jev и Clef против LLM на размеченных пунктах `bench/clauses.py`: AUC, полнота и точность, доля пар для LLM без потерь, задержка, стоимость |
