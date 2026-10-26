@@ -122,6 +122,7 @@ class LLMUsage(BaseModel):
     cached_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = Field(0, description="Из них рассуждения модели: входят в completion_tokens")
     cost: float = Field(0.0, description="Стоимость в долларах, если провайдер её сообщает")
 
     def add(self, other: LLMUsage) -> None:
@@ -129,6 +130,7 @@ class LLMUsage(BaseModel):
         self.cached_calls += other.cached_calls
         self.prompt_tokens += other.prompt_tokens
         self.completion_tokens += other.completion_tokens
+        self.reasoning_tokens += other.reasoning_tokens
         self.cost += other.cost
 
 

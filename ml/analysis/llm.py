@@ -5,9 +5,13 @@
 - структурированный JSON: `json_schema`, если модель его не принимает — `json_object`,
   затем обычный текст; ответ всегда проверяется по схеме Pydantic, неверный ответ
   один раз отправляется модели на исправление;
-- учёт токенов и стоимости, кеш ответов на диске.
+- учёт токенов (в том числе рассуждений) и стоимости, кеш ответов на диске;
+- рассуждения модели задаются `LLM_REASONING` (параметр `reasoning.effort` OpenRouter):
+  они входят в `max_tokens` и занимают большую часть времени ответа. Модель, которая
+  параметр не принимает, дальше вызывается без него.
 
-Локальная модель (vLLM) подключается сменой `LLM_BASE_URL`, `LLM_MODEL` и `LLM_API_KEY`.
+Локальная модель (vLLM) подключается сменой `LLM_BASE_URL`, `LLM_MODEL` и `LLM_API_KEY`;
+`LLM_REASONING` ей не передаётся.
 """
 
 from __future__ import annotations
@@ -35,12 +39,15 @@ T = TypeVar("T", bound=BaseModel)
 
 _RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529}
 _FORMATS = ("json_schema", "json_object", "none")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
 
 _semaphores: dict[int, threading.BoundedSemaphore] = {}
 _semaphore_lock = threading.Lock()
 # Модели, которые отказались от json_schema / json_object: дальше сразу шлём более простой формат
 _format_downgrades: dict[str, str] = {}
+# Модели, которые отказались от параметра reasoning (например, рассуждают всегда): дальше без него
+_reasoning_rejected: set[str] = set()
 
 
 def _semaphore(limit: int) -> threading.BoundedSemaphore:
@@ -109,6 +116,16 @@ class LLMClient:
         if cache is None and self.settings.llm_cache:
             cache = DirCache(self.settings.cache_dir / "llm")
         self.cache = cache
+        self.reasoning = reasoning_effort(self.settings.llm_reasoning)
+        if self.reasoning and not self.openrouter:
+            log.warning("llm: LLM_REASONING=%s передаётся только OpenRouter, для %s не используется",
+                        self.reasoning, self.base_url)
+            self.reasoning = None
+
+    @property
+    def reasoning_active(self) -> str | None:
+        """Режим рассуждений, который реально уходит в запросах: None, если модель его отвергла."""
+        return None if self.model in _reasoning_rejected else self.reasoning
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -118,13 +135,18 @@ class LLMClient:
             headers["X-Title"] = "B2B Tender"
         return headers
 
-    def _payload(self, messages: list[dict], schema_name: str, schema: dict, fmt: str, max_tokens: int) -> dict:
+    def _payload(self, messages: list[dict], schema_name: str, schema: dict, fmt: str, max_tokens: int,
+                 reasoning: str | None = None) -> dict:
         payload: dict = {
             "model": self.model,
             "messages": messages,
             "temperature": self.settings.llm_temperature,
             "max_tokens": max_tokens,
         }
+        if reasoning:
+            # Текст рассуждений не нужен: exclude убирает его из ответа, но токены всё равно оплачиваются
+            payload["reasoning"] = {"effort": reasoning} if reasoning == "none" else {
+                "effort": reasoning, "exclude": True}
         if fmt == "json_schema":
             payload["response_format"] = {
                 "type": "json_schema",
@@ -188,8 +210,12 @@ class LLMClient:
             raise LLMError("Модель ИИ не настроена", detail="пустой LLM_MODEL")
         max_tokens = max_tokens or self.settings.llm_max_tokens
         schema = _strict_schema(response_model.model_json_schema())
-        key = cache_key({"model": self.model, "messages": messages, "schema": schema_name,
-                         "temperature": self.settings.llm_temperature})
+        key_parts = {"model": self.model, "messages": messages, "schema": schema_name,
+                     "temperature": self.settings.llm_temperature}
+        if self.reasoning:
+            # Ответы с рассуждениями и без них кешируются отдельно, иначе замер сравнит кеш с кешем
+            key_parts["reasoning"] = self.reasoning
+        key = cache_key(key_parts)
         if self.cache is not None:
             hit = self.cache.get(key)
             if hit is not None:
@@ -206,9 +232,18 @@ class LLMClient:
         conversation = list(messages)
         repaired = False
         while True:
+            reasoning = self.reasoning_active
             try:
-                body = self._post(self._payload(conversation, schema_name, schema, fmt, max_tokens))
-            except _FormatRejected:
+                body = self._post(self._payload(conversation, schema_name, schema, fmt, max_tokens, reasoning))
+            except _ParamRejected as exc:
+                if reasoning and exc.about in ("reasoning", "parameter"):
+                    # Сначала убираем reasoning: формат ответа важнее для разбора находок
+                    log.warning("llm: %s не принимает reasoning=%s, дальше без него: %s",
+                                self.model, reasoning, exc.detail)
+                    _reasoning_rejected.add(self.model)
+                    continue
+                if exc.about == "reasoning":
+                    raise LLMError(detail=exc.detail) from None
                 next_fmt = _FORMATS[_FORMATS.index(fmt) + 1] if fmt != "none" else None
                 if next_fmt is None:
                     raise LLMError(detail="модель не принимает запрос") from None
@@ -217,6 +252,9 @@ class LLMClient:
                 fmt = next_fmt
                 continue
             _add_usage(usage, body)
+            if _finish_reason(body) == "length":
+                log.warning("llm: ответ %s обрезан по max_tokens=%d (рассуждения входят в этот лимит)",
+                            self.model, max_tokens)
             raw = _content(body)
             try:
                 data = response_model.model_validate(parse_json(raw))
@@ -237,14 +275,36 @@ class LLMClient:
             return LLMResult(data, usage, raw)
 
 
-class _FormatRejected(LLMError):
-    pass
+class _ParamRejected(LLMError):
+    """Модель или провайдер не принимает параметр запроса. `about` — какой: `reasoning`,
+    `format` (response_format) или `parameter` (из ответа не понять)."""
+
+    def __init__(self, about: str, *, detail: str):
+        self.about = about
+        super().__init__(detail=detail)
+
+
+def reasoning_effort(value: str) -> str | None:
+    """Значение `LLM_REASONING`: None — параметр не передаётся, модель рассуждает как по умолчанию."""
+    effort = value.strip().lower()
+    if effort in ("", "default"):
+        return None
+    if effort not in REASONING_EFFORTS:
+        raise LLMError("Настройка рассуждений модели ИИ задана неверно",
+                       detail=f"LLM_REASONING={value!r}, допустимо: default, {', '.join(REASONING_EFFORTS)}")
+    return effort
 
 
 def _client_error(response: httpx.Response) -> LLMError:
     text = response.text[:500]
-    if response.status_code in (400, 404, 422) and re.search(r"response_format|json_schema|structured|parameter", text, re.I):
-        return _FormatRejected(detail=f"HTTP {response.status_code}: {text}")
+    if response.status_code in (400, 404, 422):
+        detail = f"HTTP {response.status_code}: {text}"
+        if re.search(r"reasoning|thinking", text, re.I):
+            return _ParamRejected("reasoning", detail=detail)
+        if re.search(r"response_format|json_schema|structured", text, re.I):
+            return _ParamRejected("format", detail=detail)
+        if re.search(r"parameter", text, re.I):
+            return _ParamRejected("parameter", detail=detail)
     if response.status_code in (401, 403):
         return LLMError("Нет доступа к сервису проверки ИИ: проверьте ключ API", detail=text)
     return LLMError(detail=f"HTTP {response.status_code}: {text}")
@@ -263,11 +323,19 @@ def _content(body: dict) -> str:
     return content or ""
 
 
+def _finish_reason(body: dict) -> str | None:
+    try:
+        return body["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+
 def _add_usage(usage: LLMUsage, body: dict) -> None:
     u = body.get("usage") or {}
     usage.calls += 1
     usage.prompt_tokens += int(u.get("prompt_tokens") or 0)
     usage.completion_tokens += int(u.get("completion_tokens") or 0)
+    usage.reasoning_tokens += int((u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
     usage.cost += float(u.get("cost") or 0)
 
 

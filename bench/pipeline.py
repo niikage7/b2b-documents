@@ -8,6 +8,11 @@
     python -m bench.pipeline                               # синтетический пакет
     python -m bench.pipeline --pages 20 --scan             # скан на 20 страниц
     python -m bench.pipeline a.docx b.pdf --expected expected.json
+    python -m bench.pipeline --pages 20 --reasoning default,none --repeat 3
+
+`--reasoning` сравнивает режимы рассуждений модели (`LLM_REASONING`, только OpenRouter):
+анализ повторяется для каждого режима без кеша LLM, режимы чередуются, чтобы задержка
+провайдера в разное время не легла на один режим. Извлечение и эмбеддинги — один раз.
 
 Эталон — JSON со списком {"rule", "doc", "quote"}, где `doc` — имя файла без расширения.
 Находка совпала с эталоном, если правило и документ те же, а цитаты пересекаются.
@@ -17,10 +22,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import tempfile
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rapidfuzz import fuzz
@@ -31,6 +38,7 @@ from ml.analysis.batch_meta import extract_batch_meta
 from ml.analysis.blocks import blocks_from_extraction, chunk_blocks
 from ml.analysis.embeddings import default_embedder
 from ml.analysis.engine import analyze_rule_group, group_rules
+from ml.analysis.llm import REASONING_EFFORTS, LLMClient
 from ml.analysis.search import InMemorySearch
 from ml.checklist import load_default_checklist
 from ml.config import get_settings
@@ -53,13 +61,46 @@ def score(found: dict[str, list[FindingCandidate]], expected: list[dict]) -> dic
         out[code] = {
             "expected": len(exp),
             "found": len(got),
+            "tp_expected": tp_exp,
+            "tp_found": tp_got,
             "precision": tp_got / len(got) if got else None,
             "recall": tp_exp / len(exp) if exp else None,
         }
     return out
 
 
-def run(paths: list[Path], expected: list[dict], *, subject: str | None = None) -> None:
+@dataclass
+class Analysis:
+    found: dict[str, list[FindingCandidate]]
+    usage: LLMUsage
+    dropped: int
+    seconds: dict[str, float]
+
+
+def analyze(docs: dict, groups, *, subject, search, embedder, llm: LLMClient | None = None) -> Analysis:
+    """Группы правил параллельно по каждому документу, как задачи `analyze_rule_group`."""
+    found: dict[str, list[FindingCandidate]] = {}
+    seconds: dict[str, float] = {}
+    usage = LLMUsage()
+    dropped = 0
+    for name, (_, _, blocks) in docs.items():
+        started = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+            results = list(pool.map(
+                lambda g, blocks=blocks, name=name: analyze_rule_group(
+                    blocks, g, subject=subject, document_id=name, search=search, embedder=embedder, llm=llm),
+                groups,
+            ))
+        seconds[name] = time.perf_counter() - started
+        found[name] = [c for r in results for c in r.candidates]
+        dropped += sum(len(r.dropped) for r in results)
+        for r in results:
+            usage.add(r.usage)
+    return Analysis(found, usage, dropped, seconds)
+
+
+def run(paths: list[Path], expected: list[dict], *, subject: str | None = None,
+        reasoning: list[str] | None = None, repeat: int = 1) -> None:
     settings = get_settings()
     timings: dict[str, dict[str, float]] = defaultdict(dict)
     docs = {}
@@ -91,27 +132,20 @@ def run(paths: list[Path], expected: list[dict], *, subject: str | None = None) 
 
     _, rules = load_default_checklist()
     groups = group_rules(rules)
-    found: dict[str, list[FindingCandidate]] = {}
-    usage = LLMUsage()
-    dropped = 0
-    for name, (_, _, blocks) in docs.items():
-        started = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=len(groups)) as pool:
-            results = list(pool.map(
-                lambda g, blocks=blocks, name=name: analyze_rule_group(
-                    blocks, g, subject=subject, document_id=name, search=search, embedder=embedder),
-                groups,
-            ))
-        timings[name]["анализ"] = time.perf_counter() - started
-        found[name] = [c for r in results for c in r.candidates]
-        dropped += sum(len(r.dropped) for r in results)
-        for r in results:
-            usage.add(r.usage)
+    if reasoning:
+        _print_timings(timings)
+        compare_reasoning(docs, groups, expected, modes=reasoning, repeat=repeat,
+                          subject=subject, search=search, embedder=embedder)
+        return
+
+    analysis = analyze(docs, groups, subject=subject, search=search, embedder=embedder)
+    for name, seconds in analysis.seconds.items():
+        timings[name]["анализ"] = seconds
     _print_timings(timings)
+    found, usage, dropped = analysis.found, analysis.usage, analysis.dropped
     total = sum(len(v) for v in found.values())
     print(f"\nНаходок: {total}, отброшено ответов LLM: {dropped} ({dropped / max(1, total + dropped):.0%})")
-    print(f"LLM: вызовов {usage.calls}, из кеша {usage.cached_calls}, токенов {usage.prompt_tokens} + "
-          f"{usage.completion_tokens}, стоимость ${usage.cost:.4f}")
+    print(f"LLM: {_usage_line(usage)}")
     if expected:
         print(f"\n{'правило':<8}{'ожидалось':>10}{'найдено':>9}{'точность':>10}{'полнота':>9}")
         for code, row in score(found, expected).items():
@@ -123,12 +157,77 @@ def run(paths: list[Path], expected: list[dict], *, subject: str | None = None) 
             print(f"  {name} {c.rule_code} [{c.confidence:.2f}] {c.quote[:90]}")
 
 
+def compare_reasoning(docs: dict, groups, expected: list[dict], *, modes: list[str], repeat: int,
+                      subject, search, embedder) -> None:
+    """Анализ в каждом режиме рассуждений `repeat` раз, без кеша LLM: время, токены, качество."""
+    base = replace(get_settings(), llm_cache=False)
+    rows = []
+    for i in range(repeat):
+        # Порядок режимов меняется от прогона к прогону: ни один режим не идёт всегда первым
+        for mode in modes if i % 2 == 0 else modes[::-1]:
+            client = LLMClient(replace(base, llm_reasoning=mode))
+            if mode != "default" and client.reasoning is None:
+                print("\nLLM_REASONING действует только для OpenRouter: сравнение режимов не имеет смысла")
+                return
+            print(f"\nрежим {mode}, прогон {i + 1} из {repeat}…", flush=True)
+            analysis = analyze(docs, groups, subject=subject, search=search, embedder=embedder, llm=client)
+            if mode != "default" and client.reasoning_active is None:
+                print(f"  модель не приняла reasoning={mode}: прогон шёл с рассуждениями по умолчанию")
+            rows.append((mode, i + 1, analysis))
+
+    print(f"\n{'режим':<9}{'прогон':>7}{'анализ, с':>11}{'вызовов':>9}{'вход':>8}{'выход':>8}"
+          f"{'рассужд.':>10}{'$':>9}{'находок':>9}{'отброш.':>9}{'полнота':>10}{'точность':>10}")
+    for mode, n, a in rows:
+        u = a.usage
+        found = sum(len(v) for v in a.found.values())
+        recall, precision = _totals(a.found, expected)
+        print(f"{mode:<9}{n:>7}{sum(a.seconds.values()):>11.1f}{u.calls:>9}{u.prompt_tokens:>8}"
+              f"{u.completion_tokens:>8}{u.reasoning_tokens:>10}{u.cost:>9.4f}{found:>9}{a.dropped:>9}"
+              f"{recall:>10}{precision:>10}")
+
+    print("\nПо режимам (время анализа — медиана и разброс по прогонам; токены и находки — в среднем на прогон):")
+    for mode in modes:
+        runs = [a for m, _, a in rows if m == mode]
+        times = [sum(a.seconds.values()) for a in runs]
+        output = statistics.mean(a.usage.completion_tokens for a in runs)
+        thinking = statistics.mean(a.usage.reasoning_tokens for a in runs)
+        cost = statistics.mean(a.usage.cost for a in runs)
+        found = statistics.mean(sum(len(v) for v in a.found.values()) for a in runs)
+        print(f"  {mode}: {statistics.median(times):.1f} с ({min(times):.1f}–{max(times):.1f}), "
+              f"выход {output:.0f} ток., из них рассуждения {thinking:.0f}, ${cost:.4f}, находок {found:.1f}")
+    if expected:
+        print("  Полнота — найдено ожидаемых находок; точность — сколько находок совпало с эталоном.")
+
+
+def _totals(found: dict[str, list[FindingCandidate]], expected: list[dict]) -> tuple[str, str]:
+    if not expected:
+        return "—", "—"
+    rows = score(found, expected).values()
+    recall = f"{sum(r['tp_expected'] for r in rows)} из {sum(r['expected'] for r in rows)}"
+    precision = f"{sum(r['tp_found'] for r in rows)} из {sum(r['found'] for r in rows)}"
+    return recall, precision
+
+
+def _usage_line(usage: LLMUsage) -> str:
+    return (f"вызовов {usage.calls}, из кеша {usage.cached_calls}, токенов {usage.prompt_tokens} + "
+            f"{usage.completion_tokens} (рассуждения {usage.reasoning_tokens}), стоимость ${usage.cost:.4f}")
+
+
 def _print_timings(timings: dict[str, dict[str, float]]) -> None:
     print(f"\n{'документ':<24}{'этап':<14}{'секунд':>8}")
     for name, stages in timings.items():
         for stage, seconds in stages.items():
             print(f"{name:<24}{stage:<14}{seconds:>8.1f}")
         print(f"{name:<24}{'итого':<14}{sum(stages.values()):>8.1f}")
+
+
+def _modes(value: str) -> list[str]:
+    modes = [m.strip().lower() for m in value.split(",") if m.strip()]
+    unknown = [m for m in modes if m not in ("default", *REASONING_EFFORTS)]
+    if not modes or unknown:
+        raise argparse.ArgumentTypeError(
+            f"режимы через запятую из: default, {', '.join(REASONING_EFFORTS)}")
+    return modes
 
 
 def main() -> None:
@@ -138,6 +237,9 @@ def main() -> None:
     parser.add_argument("--subject")
     parser.add_argument("--pages", type=int, help="синтетический договор такой длины")
     parser.add_argument("--scan", action="store_true", help="синтетический договор как скан")
+    parser.add_argument("--reasoning", type=_modes,
+                        help="сравнить режимы рассуждений, например default,none (только OpenRouter)")
+    parser.add_argument("--repeat", type=int, default=1, help="прогонов анализа на режим при --reasoning")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
@@ -153,7 +255,7 @@ def main() -> None:
                 contract = make_scan(contract, tmpdir / "contract-scan.pdf")
             paths = [contract, make_notice_docx(tmpdir / "notice.docx")]
             expected = [dict(e, doc=contract.stem if e["doc"] == "contract" else "notice") for e in EXPECTED]
-        run(paths, expected, subject=args.subject)
+        run(paths, expected, subject=args.subject, reasoning=args.reasoning, repeat=max(1, args.repeat))
 
 
 if __name__ == "__main__":

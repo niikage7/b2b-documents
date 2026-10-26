@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import argparse
 import json
 
 import httpx
 import pytest
 
-from contracts.analysis import LLMGroupResponse, RuleSpec, RuleVariable
+from bench.pipeline import _modes, _totals
+from contracts.analysis import FindingCandidate, LLMGroupResponse, LLMUsage, RuleSpec, RuleVariable
 from ml.analysis.anchor import anchor_quote, prepare_quote
 from ml.analysis.blocks import SimpleBlock, blocks_from_text, chunk_blocks
 from ml.analysis.cache import DirCache
+from ml.analysis.llm import reasoning_effort
 from ml.analysis.search import PgVectorSearch
 from ml.analysis.templates import render_template, rule_query_text, validate_rule
 from ml.checklist import load_default_checklist
@@ -251,3 +254,91 @@ def test_llm_cache(tmp_path):
     second = client.chat(MESSAGES, LLMGroupResponse)
     assert len(calls) == 1 and second.cached and second.usage.cached_calls == 1
     assert second.data == first.data
+
+
+# --- рассуждения модели -----------------------------------------------------------------
+
+
+def _reasoning_sent(llm_reasoning: str, **overrides) -> dict | None:
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return _ok(ANSWER)
+
+    make_client(handler, llm_reasoning=llm_reasoning, **overrides).chat(MESSAGES, LLMGroupResponse)
+    return seen[0].get("reasoning")
+
+
+def test_reasoning_setting_values():
+    assert reasoning_effort("") is None and reasoning_effort(" Default ") is None
+    assert reasoning_effort("NONE") == "none"
+    with pytest.raises(LLMError) as exc:
+        reasoning_effort("fast")
+    assert "LLM_REASONING" in exc.value.detail
+
+
+def test_llm_reasoning_param():
+    assert _reasoning_sent("") is None
+    assert _reasoning_sent("none") == {"effort": "none"}
+    assert _reasoning_sent("low") == {"effort": "low", "exclude": True}
+    # vLLM и другие API, совместимые с OpenAI, параметр не получают
+    assert _reasoning_sent("none", llm_base_url="http://localhost:8000/v1") is None
+
+
+def test_llm_counts_reasoning_tokens():
+    usage = {"prompt_tokens": 100, "completion_tokens": 320, "completion_tokens_details": {"reasoning_tokens": 300}}
+    client = make_client(lambda r: _ok(ANSWER, usage))
+    first = client.chat(MESSAGES, LLMGroupResponse).usage
+    assert (first.completion_tokens, first.reasoning_tokens) == (320, 300)
+    total = LLMUsage()
+    total.add(first)
+    total.add(first)
+    assert total.reasoning_tokens == 600
+
+
+@pytest.mark.parametrize("error", [
+    (400, '{"error": "reasoning effort none is not supported: this model always thinks"}'),
+    (404, '{"error": "No endpoints found that can handle the requested parameters"}'),
+])
+def test_llm_drops_reasoning_when_rejected(error):
+    model = f"test/always-thinks-{error[0]}"
+    sent = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        sent.append((body.get("reasoning"), body["response_format"]["type"]))
+        return httpx.Response(error[0], text=error[1]) if "reasoning" in body else _ok(ANSWER)
+
+    client = make_client(handler, llm_model=model, llm_reasoning="none")
+    assert client.chat(MESSAGES, LLMGroupResponse).data.rules
+    client.chat(MESSAGES, LLMGroupResponse)
+    # Формат ответа не понижается: отказ из-за reasoning, а не из-за json_schema
+    assert sent == [({"effort": "none"}, "json_schema"), (None, "json_schema"), (None, "json_schema")]
+    assert client.reasoning_active is None
+
+
+def test_llm_cache_separates_reasoning(tmp_path):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content).get("reasoning"))
+        return _ok(ANSWER)
+
+    for mode in ("", "none", "none"):
+        client = make_client(handler, llm_reasoning=mode)
+        client.cache = DirCache(tmp_path / "llm")
+        client.chat(MESSAGES, LLMGroupResponse)
+    assert calls == [None, {"effort": "none"}]
+
+
+def test_bench_reasoning_modes_and_totals():
+    assert _modes("default, NONE") == ["default", "none"]
+    with pytest.raises(argparse.ArgumentTypeError):
+        _modes("default,fast")
+    found = {"contract": [FindingCandidate(rule_code="R-04", level="critical", block_id="b1", start=0, end=20,
+                                           quote="срок поставки 3 дня", explanation="", confidence=0.9,
+                                           match_score=100)]}
+    expected = [{"rule": "R-04", "doc": "contract", "quote": "срок поставки 3 дня"},
+                {"rule": "R-05", "doc": "contract", "quote": "аванс не предусмотрен"}]
+    assert _totals(found, expected) == ("1 из 2", "1 из 1")

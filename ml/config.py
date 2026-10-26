@@ -75,6 +75,9 @@ class Settings:
     )
     llm_temperature: float = field(default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.0))
     llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 4000))
+    # Рассуждения модели (только OpenRouter): пусто — как у модели по умолчанию, `none` — выключить,
+    # `minimal` … `max` — уровень. Токены рассуждений входят в LLM_MAX_TOKENS и в стоимость.
+    llm_reasoning: str = field(default_factory=lambda: _env("LLM_REASONING", ""))
     llm_cache: bool = field(default_factory=lambda: _env("LLM_CACHE", "1") not in ("0", "false", ""))
 
     # Движок правил
