@@ -82,6 +82,7 @@ def test_rule(
                 page=getattr(block, "page", None),
                 level=cand.level,
                 explanation=cand.explanation,
+                recommendation=cand.recommendation,
                 confidence=cand.confidence,
             )
         )

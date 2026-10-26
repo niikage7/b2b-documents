@@ -76,7 +76,7 @@ class FakeLLM:
                 fragment = _fragment_of(prompt, quote)
                 if fragment is not None:
                     findings.append({"fragment": fragment, "quote": quote, "explanation": explanation,
-                                     "confidence": 0.9})
+                                     "recommendation": f"Запросить разъяснение по {code}", "confidence": 0.9})
             for quote in self.invent.get(code, []):
                 findings.append({"fragment": 1, "quote": quote, "explanation": "выдумано", "confidence": 0.7})
             rules.append({"rule_code": code, "findings": findings})

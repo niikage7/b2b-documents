@@ -66,6 +66,7 @@ def test_full_checklist_finds_planted_risks(contract_blocks, search):
         block = by_id[c.block_id]
         assert block.text[c.start : c.end] == c.quote  # цитата существует в тексте
         assert block.section_number  # у находки есть раздел
+    assert all(c.recommendation for c in candidates)
     levels = {c.rule_code: c.level for c in candidates}
     assert levels["R-04"] == "critical" and levels["R-07"] == "warning"
     assert [d.reason for d in dropped] == ["quote_not_found"]  # выдуманная цитата отброшена

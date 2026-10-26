@@ -247,6 +247,7 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
                     end=anchor.end,
                     quote=anchor.block.text[anchor.start : anchor.end],
                     explanation=finding.explanation.strip(),
+                    recommendation=finding.recommendation.strip() or None,
                     confidence=round(finding.confidence, 3),
                     match_score=anchor.score,
                 )

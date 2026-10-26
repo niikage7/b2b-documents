@@ -63,6 +63,7 @@ class LLMFinding(BaseModel):
     fragment: int | None = Field(None, description="Номер фрагмента из запроса, где стоит цитата")
     quote: str = Field(description="Дословная цитата из фрагмента")
     explanation: str = Field(description="Почему это риск для поставщика, 1–3 предложения")
+    recommendation: str = Field("", description="Что поставщику сделать с этим риском, одно предложение")
     confidence: float = Field(description="Уверенность 0–1; значения вне диапазона обрезаются")
 
     @field_validator("confidence", mode="before")
@@ -104,6 +105,8 @@ class FindingCandidate(BaseModel):
     end: int
     quote: str = Field(description="Ровно `block.text[start:end]`")
     explanation: str
+    recommendation: str | None = Field(None, description="Что поставщику сделать: запросить разъяснение, "
+                                                          "предложить изменить условие, заложить риск в цену")
     confidence: float = Field(ge=0, le=1)
     match_score: float = Field(description="Совпадение цитаты LLM с текстом блока, 0–100")
 
@@ -152,6 +155,7 @@ class RuleTestFinding(BaseModel):
     page: int | None = None
     level: Level
     explanation: str
+    recommendation: str | None = None
     confidence: float
 
 

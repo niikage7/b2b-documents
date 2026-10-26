@@ -156,6 +156,8 @@ def run(paths: list[Path], expected: list[dict], *, subject: str | None = None,
     for name, cands in found.items():
         for c in cands:
             print(f"  {name} {c.rule_code} [{c.confidence:.2f}] {c.quote[:90]}")
+            if c.recommendation:
+                print(f"      → {c.recommendation}")
 
 
 def compare_reasoning(docs: dict, groups, expected: list[dict], *, modes: list[str], repeat: int,

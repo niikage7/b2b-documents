@@ -311,7 +311,7 @@ def merge_findings(s: Session, document_id, results: Iterable[RuleGroupResult]) 
             rule_version_id=as_uuid(cand.rule_version_id) if cand.rule_version_id else None,
             source="ai", level=cand.level, original_level=cand.level, status="new", block_id=block_id,
             start=cand.start, end=cand.end, quote=cand.quote, explanation=cand.explanation,
-            recommendation=getattr(cand, "recommendation", None), confidence=cand.confidence,
+            recommendation=cand.recommendation, confidence=cand.confidence,
         )
         s.add(finding)
         s.flush()

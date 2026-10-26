@@ -90,6 +90,7 @@ def test_pipeline_to_findings(s, world):
         assert block["text"][f["start"]:f["end"]] == f["quote"]  # цитата подсвечивается ровно
         assert f["section_number"] and f["section_title"] and f["page"]  # у каждой находки есть раздел
         assert f["rule"]["code"].startswith("R-") and f["confidence_level"] == "high"
+        assert f["recommendation"].startswith("Запросить разъяснение")
 
     bview = batches.batch_view(s, world["batch_id"])
     assert bview["status"] == "done" and bview["meta"] == {"nmck": "4 850 000 руб."}
