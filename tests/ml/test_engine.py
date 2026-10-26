@@ -143,5 +143,7 @@ def test_batch_meta_llm_fallback_and_none():
     fake = FakeLLM()
     assert extract_batch_meta([("notice.pdf", blocks)], use_llm=False) is None
     blocks = blocks_from_text("ИЗВЕЩЕНИЕ\nЗакупка проводится в электронной форме.")
-    assert extract_batch_meta([("notice.pdf", blocks)], llm=fake.client()) is None
+    assert extract_batch_meta([("notice.pdf", blocks)], llm=fake.client(llm_reasoning="low")) is None
     assert fake.requests and fake.requests[0]["response_format"]["json_schema"]["name"] == "batch_meta"
+    # Короткий вызов идёт без рассуждений, даже если они включены для анализа
+    assert fake.requests[0]["reasoning"] == {"effort": "none"}

@@ -87,7 +87,10 @@ def extract_batch_meta(
     if meta_model and llm is None:
         client = LLMClient(model=meta_model)
     try:
-        answer = client.chat(meta_prompt("\n".join(parts)), _Meta, schema_name="batch_meta", max_tokens=200)
+        # Без рассуждений при любом LLM_REASONING: с ними ответ не укладывался в 200 токенов и приходил
+        # пустым — 2 из 3 вызовов на тексте контракта у deepseek-v4.1-flash и v4-flash-0731 (замер 27.10)
+        answer = client.chat(meta_prompt("\n".join(parts)), _Meta, schema_name="batch_meta", max_tokens=200,
+                             reasoning="none")
     except LLMError as exc:
         log.warning("batch_meta: LLM недоступна, предмет не определён: %s", exc)
         return None

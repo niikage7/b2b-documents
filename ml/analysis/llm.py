@@ -204,17 +204,25 @@ class LLMClient:
         *,
         schema_name: str = "answer",
         max_tokens: int | None = None,
+        reasoning: str | None = None,
     ) -> LLMResult:
-        """Вызов модели с ответом по схеме `response_model`."""
+        """Вызов модели с ответом по схеме `response_model`.
+
+        `reasoning` заменяет `LLM_REASONING` для этого вызова: короткому ответу с малым
+        `max_tokens` рассуждения не нужны, а с ними он может прийти пустым.
+        """
         if not self.model:
             raise LLMError("Модель ИИ не настроена", detail="пустой LLM_MODEL")
         max_tokens = max_tokens or self.settings.llm_max_tokens
+        effort = self.reasoning
+        if reasoning is not None:
+            effort = reasoning_effort(reasoning) if self.openrouter else None
         schema = _strict_schema(response_model.model_json_schema())
         key_parts = {"model": self.model, "messages": messages, "schema": schema_name,
                      "temperature": self.settings.llm_temperature}
-        if self.reasoning:
+        if effort:
             # Ответы с рассуждениями и без них кешируются отдельно, иначе замер сравнит кеш с кешем
-            key_parts["reasoning"] = self.reasoning
+            key_parts["reasoning"] = effort
         key = cache_key(key_parts)
         if self.cache is not None:
             hit = self.cache.get(key)
@@ -232,14 +240,14 @@ class LLMClient:
         conversation = list(messages)
         repaired = False
         while True:
-            reasoning = self.reasoning_active
+            active = None if self.model in _reasoning_rejected else effort
             try:
-                body = self._post(self._payload(conversation, schema_name, schema, fmt, max_tokens, reasoning))
+                body = self._post(self._payload(conversation, schema_name, schema, fmt, max_tokens, active))
             except _ParamRejected as exc:
-                if reasoning and exc.about in ("reasoning", "parameter"):
+                if active and exc.about in ("reasoning", "parameter"):
                     # Сначала убираем reasoning: формат ответа важнее для разбора находок
                     log.warning("llm: %s не принимает reasoning=%s, дальше без него: %s",
-                                self.model, reasoning, exc.detail)
+                                self.model, active, exc.detail)
                     _reasoning_rejected.add(self.model)
                     continue
                 if exc.about == "reasoning":

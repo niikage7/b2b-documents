@@ -278,7 +278,7 @@ def test_reasoning_setting_values():
     assert "LLM_REASONING" in exc.value.detail
 
 
-def test_llm_reasoning_defaults_to_low(monkeypatch):
+def test_llm_reasoning_defaults_to_none(monkeypatch):
     monkeypatch.delenv("LLM_REASONING", raising=False)
     seen = []
 
@@ -287,7 +287,7 @@ def test_llm_reasoning_defaults_to_low(monkeypatch):
         return _ok(ANSWER)
 
     make_client(handler).chat(MESSAGES, LLMGroupResponse)
-    assert seen[0]["reasoning"] == {"effort": "low", "exclude": True}
+    assert seen[0]["reasoning"] == {"effort": "none"}
 
 
 def test_llm_reasoning_param():
@@ -296,6 +296,22 @@ def test_llm_reasoning_param():
     assert _reasoning_sent("low") == {"effort": "low", "exclude": True}
     # vLLM и другие API, совместимые с OpenAI, параметр не получают
     assert _reasoning_sent("none", llm_base_url="http://localhost:8000/v1") is None
+
+
+def test_llm_reasoning_per_call():
+    for base_url, expected in (("https://openrouter.ai/api/v1", {"effort": "none"}), ("http://localhost:8000/v1", None)):
+        seen = []
+
+        def handler(request, seen=seen):
+            seen.append(json.loads(request.content))
+            return _ok(ANSWER)
+
+        client = make_client(handler, llm_reasoning="low", llm_base_url=base_url)
+        client.chat(MESSAGES, LLMGroupResponse, reasoning="none")
+        client.chat(MESSAGES, LLMGroupResponse)
+        assert seen[0].get("reasoning") == expected
+        # Настройка клиента не меняется: следующий вызов — снова с LLM_REASONING
+        assert seen[1].get("reasoning") == ({"effort": "low", "exclude": True} if expected else None)
 
 
 def test_llm_counts_reasoning_tokens():

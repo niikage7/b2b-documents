@@ -65,7 +65,9 @@ class Settings:
         default_factory=lambda: _env("LLM_BASE_URL", "https://openrouter.ai/api/v1")
     )
     llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", ""))
-    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", ""))
+    # Модель по умолчанию выбрана сравнением 27.10 (docs/ml-plan.md): та же точность, что у v4-flash-0731,
+    # полнота на трудных пунктах 0,93 против 0,78, 20 страниц — 8 с против 10 с
+    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "deepseek/deepseek-v4.1-flash-1017"))
     llm_meta_model: str = field(default_factory=lambda: _env("LLM_META_MODEL", ""))
     llm_timeout: float = field(default_factory=lambda: _env_float("LLM_TIMEOUT", 90))
     llm_max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
@@ -77,9 +79,10 @@ class Settings:
     llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 4000))
     # Рассуждения модели (только OpenRouter): `default` — как у модели, `none` — выключить,
     # `minimal` … `max` — уровень. Токены рассуждений входят в LLM_MAX_TOKENS и в стоимость.
-    # По умолчанию `low`: на 20 страницах с уровнем модели (high) анализ падал в 3 из 4 прогонов —
-    # рассуждения съедали весь max_tokens; low — 25–30 с, none — 10–12 с при той же полноте (замер 27.10).
-    llm_reasoning: str = field(default_factory=lambda: _env("LLM_REASONING", "low"))
+    # По умолчанию `none`: на deepseek-v4.1-flash-1017 анализ 20 страниц — 8 с против 15 с с `low`,
+    # полнота 9 из 10 у обоих, на трудных пунктах 0,93 против 0,97. С `low` ответы обрезались по
+    # max_tokens, у v4-flash-0731 группа правил падала целиком; с уровнем модели (high) — 3 прогона из 4 (замеры 27.10).
+    llm_reasoning: str = field(default_factory=lambda: _env("LLM_REASONING", "none"))
     llm_cache: bool = field(default_factory=lambda: _env("LLM_CACHE", "1") not in ("0", "false", ""))
 
     # Движок правил
