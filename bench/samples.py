@@ -285,18 +285,40 @@ class _PdfLayout:
         return path
 
 
-def make_contract_pdf(path: Path, *, font_size: float = 12) -> Path:
+FILLER: list[Item] = [
+    Item(0, "Порядок взаимодействия сторон", True),
+    Item(1, "Стороны обмениваются документами по Контракту в единой информационной системе в сфере "
+            "закупок, а при её недоступности — письмами на адреса, указанные в Контракте."),
+    Item(1, "Сторона, изменившая адрес или банковские реквизиты, уведомляет об этом другую сторону "
+            "в течение 5 (пяти) рабочих дней с даты изменения."),
+    Item(1, "Документ считается полученным стороной в день его размещения в единой информационной "
+            "системе или в день вручения письма."),
+    Item(1, "Представители сторон, ответственные за исполнение Контракта, назначаются приказами "
+            "сторон и указываются в Приложении № 3 к Контракту."),
+]
+
+
+def long_contract(pages: int) -> list[Item]:
+    """Договор нужной длины для замера скорости: основные разделы и повторяющиеся служебные."""
+    items = list(CONTRACT)
+    while len(items) < pages * 14:
+        items.extend(FILLER)
+    return items
+
+
+def make_contract_pdf(path: Path, *, font_size: float = 12, items: list[Item] | None = None) -> Path:
+    items = items or CONTRACT
     layout = _PdfLayout(font_size)
     layout.paragraph(CONTRACT_TITLE, bold=True, center=True, space_after=10)
-    numbers = expected_numbers(CONTRACT)
-    for item, number in zip(CONTRACT, numbers, strict=True):
+    numbers = expected_numbers(items)
+    for item, number in zip(items, numbers, strict=True):
         sup = None
         if item.text.startswith("Цена Контракта составляет"):
             sup = "1"
             layout.footnotes.append("Цена указана с учётом всех налогов и сборов.")
         layout.paragraph(item.text, number=number, bold=item.bold, center=item.level == 0, sup=sup,
                          space_after=8 if item.level == 0 else 4)
-    layout.paragraph("Реквизиты и подписи сторон", number=f"{len([i for i in CONTRACT if i.level == 0]) + 1}.",
+    layout.paragraph("Реквизиты и подписи сторон", number=f"{len([i for i in items if i.level == 0]) + 1}.",
                      bold=True, center=False)
     layout.columns(REQUISITES)
     return layout.save(path)

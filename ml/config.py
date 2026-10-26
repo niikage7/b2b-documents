@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-PIPELINE_VERSION = "2026.10.26-5"
+PIPELINE_VERSION = "2026.10.26-7"
 """Версия конвейера извлечения. Любая правка подготовки или чистки OCR увеличивает её,
 иначе кеш молча отдаст старое распознавание."""
 

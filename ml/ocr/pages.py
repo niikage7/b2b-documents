@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import statistics
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -41,6 +42,12 @@ def _cache_key(digest: str, page: int, dpi: int, lang: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _is_dash(w: TsvWord, line_height: float) -> bool:
+    """Одиночное тире между словами («далее — Товар») — текст, а не остаток линии таблицы:
+    оно не длиннее двух высот строки."""
+    return w.text in ("—", "–", "-") and w.width <= 2 * line_height
+
+
 def clean_words(words: list[TsvWord]) -> list[TsvWord]:
     """Убирает мусор OCR: слова из одних линий, слова с уверенностью ниже 0,3 и строки
     со средней уверенностью ниже 0,55. Строки берутся по геометрии, а не по разбивке
@@ -49,8 +56,9 @@ def clean_words(words: list[TsvWord]) -> list[TsvWord]:
     kept: list[TsvWord] = []
     dropped_lines = dropped_words = 0
     candidates: list[TsvWord] = []
+    line_height = statistics.median(w.height for w in words) if words else 0
     for w in words:
-        if set(w.text) <= _LINE_ONLY or w.conf < WORD_MIN_CONF:
+        if (set(w.text) <= _LINE_ONLY and not _is_dash(w, line_height)) or w.conf < WORD_MIN_CONF:
             dropped_words += 1
             continue
         candidates.append(w)

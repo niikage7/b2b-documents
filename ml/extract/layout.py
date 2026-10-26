@@ -350,9 +350,13 @@ def _breaks(para: Para, prev: Line, line: Line, pitch: float, col_x1: float) -> 
 
 
 def _centered(line: Line, para: Para) -> bool:
+    """Строка по центру колонки: поля с обеих сторон заметные и примерно равные. Красная
+    строка абзаца, которая заканчивается чуть раньше правого края, центром не считается."""
     left = line.x0 - para.column_x0
     right = para.column_x1 - line.x1
-    return left > 3 * line.size and abs(left - right) < 2 * line.size
+    width = para.column_x1 - para.column_x0
+    margin = max(3 * line.size, 0.1 * width)
+    return left > margin and right > margin and abs(left - right) < max(2 * line.size, 0.05 * width)
 
 
 def para_to_raw(para: Para, order: int, *, number_pattern: bool = True) -> RawParagraph | None:

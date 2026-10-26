@@ -23,6 +23,8 @@ from ml.errors import (
 
 log = logging.getLogger(__name__)
 
+_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
+MAX_PART_BYTES = 300 * 1024 * 1024
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
@@ -109,8 +111,12 @@ def _check_zip(path: Path) -> FileCheck:
         with zipfile.ZipFile(path) as zf:
             names = set(zf.namelist())
             if "word/document.xml" in names:
+                if zf.getinfo("word/document.xml").file_size > MAX_PART_BYTES:
+                    err = CorruptedFileError("Файл DOCX слишком большой для разбора")
+                    err.kind = "docx"
+                    raise err
                 try:
-                    etree.fromstring(zf.read("word/document.xml"))
+                    etree.fromstring(zf.read("word/document.xml"), _PARSER)
                 except (etree.XMLSyntaxError, zipfile.BadZipFile, KeyError, OSError) as exc:
                     err = CorruptedFileError(detail=f"docx: {exc}")
                     err.kind = "docx"

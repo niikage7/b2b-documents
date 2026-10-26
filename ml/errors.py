@@ -75,3 +75,14 @@ class LLMResponseError(AnalysisError):
 class RuleTemplateError(AnalysisError):
     code = "rule_template"
     default_message = "В инструкции правила есть ошибка"
+
+
+class TextTooLongError(AnalysisError):
+    code = "text_too_long"
+    default_message = "Текст для проверки длиннее 20 000 символов"
+
+
+class RuleTestTimeoutError(AnalysisError):
+    code = "test_timeout"
+    default_message = "Проверка правила не уложилась в 60 секунд — попробуйте текст короче"
+    retryable = True

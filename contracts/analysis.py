@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Level = Literal["critical", "warning"]
 RuleKind = Literal["semantic_llm", "llm"]
@@ -63,7 +63,18 @@ class LLMFinding(BaseModel):
     fragment: int | None = Field(None, description="Номер фрагмента из запроса, где стоит цитата")
     quote: str = Field(description="Дословная цитата из фрагмента")
     explanation: str = Field(description="Почему это риск для поставщика, 1–3 предложения")
-    confidence: float = Field(ge=0, le=1)
+    confidence: float = Field(description="Уверенность 0–1; значения вне диапазона обрезаются")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _clamp(cls, value: object) -> float:
+        try:
+            number = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.5
+        if number > 1 and number <= 100:
+            number /= 100  # модель ответила в процентах
+        return min(1.0, max(0.0, number))
 
 
 class LLMRuleAnswer(BaseModel):

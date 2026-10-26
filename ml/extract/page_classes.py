@@ -112,9 +112,3 @@ def classify_page(page: pymupdf.Page, words: list[LWord], quality: LayerQuality)
     )
     return info
 
-
-def classify_pages(path) -> list[PageInfo]:
-    """Классы всех страниц PDF. Открывает файл сам: вызывать в воркере с пулом процессов."""
-    from ml.extract.pdf_extract import plan_pdf
-
-    return plan_pdf(path)

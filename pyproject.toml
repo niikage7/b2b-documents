@@ -41,10 +41,11 @@ build-backend = "setuptools.build_meta"
 include = ["contracts*", "ml*"]
 
 [tool.setuptools.package-data]
-ml = ["checklist/*.json"]
+"ml.checklist" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["ignore:builtin type .* has no __module__ attribute:DeprecationWarning"]
 markers = [
     "tesseract: нужен Tesseract с языками rus и eng",
     "soffice: нужен LibreOffice (soffice) в PATH",

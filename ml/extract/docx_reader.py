@@ -59,6 +59,9 @@ _SYMBOL_FONT = {
 }
 _TERMINAL = re.compile(r"[,;]\s*$")
 
+MAX_PART_BYTES = 300 * 1024 * 1024
+"""Предел распакованного размера части DOCX: защита от «zip-бомбы» внутри файла."""
+
 CHARS_PER_PAGE = 1800
 """Оценка числа знаков на странице для DOCX без меток страниц (14 кегль, поля ГОСТ)."""
 PARAGRAPH_OVERHEAD = 40
@@ -150,6 +153,8 @@ class DocxReader:
         if not name:
             return None
         try:
+            if self.zip.getinfo(name).file_size > MAX_PART_BYTES:
+                raise CorruptedFileError("Файл DOCX слишком большой для разбора", detail=f"{name} > {MAX_PART_BYTES}")
             data = self.zip.read(name)
         except KeyError:
             return None
