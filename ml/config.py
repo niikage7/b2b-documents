@@ -54,7 +54,10 @@ class Settings:
 
     # Эмбеддинги
     embedding_model: str = field(
-        default_factory=lambda: _env("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+        # Выбрана 27.10 на стенде bench.embeddings: на фрагментах по 60 токенов e5-base, BERTA и
+        # USER2-base равны (0,99–1,00 при бюджете 1600), при бюджете 800 BERTA точнее векторным
+        # поиском (0,95 против 0,90 и 0,88) и вдвое легче e5-base
+        default_factory=lambda: _env("EMBEDDING_MODEL", "sergeyzh/BERTA")
     )
     embedding_dim: int = field(default_factory=lambda: _env_int("EMBEDDING_DIM", 768))
     embedding_batch_size: int = field(default_factory=lambda: _env_int("EMBEDDING_BATCH_SIZE", 32))

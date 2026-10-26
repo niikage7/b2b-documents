@@ -81,8 +81,11 @@ class SentenceTransformerEmbedder:
             return []
         prefix = self.query_prefix if kind == "query" else self.passage_prefix
         model = self._load()
+        # Префикс — через `prompt`: так он заменяет промпт модели по умолчанию (у BERTA это
+        # «Classification»), а не добавляется к нему
         vectors = model.encode(
-            [prefix + t for t in texts],
+            list(texts),
+            prompt=prefix,
             batch_size=self.batch_size,
             normalize_embeddings=True,
             convert_to_numpy=True,

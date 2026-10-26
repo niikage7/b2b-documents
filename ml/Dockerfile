@@ -31,7 +31,7 @@ COPY contracts ./contracts
 COPY ml ./ml
 RUN pip install ".[ml,embeddings,pg]"
 
-ARG EMBEDDING_MODEL=intfloat/multilingual-e5-base
+ARG EMBEDDING_MODEL=sergeyzh/BERTA
 ENV EMBEDDING_MODEL=${EMBEDDING_MODEL}
 RUN python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['EMBEDDING_MODEL'])"
 
