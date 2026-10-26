@@ -278,6 +278,18 @@ def test_reasoning_setting_values():
     assert "LLM_REASONING" in exc.value.detail
 
 
+def test_llm_reasoning_defaults_to_low(monkeypatch):
+    monkeypatch.delenv("LLM_REASONING", raising=False)
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return _ok(ANSWER)
+
+    make_client(handler).chat(MESSAGES, LLMGroupResponse)
+    assert seen[0]["reasoning"] == {"effort": "low", "exclude": True}
+
+
 def test_llm_reasoning_param():
     assert _reasoning_sent("") is None
     assert _reasoning_sent("none") == {"effort": "none"}

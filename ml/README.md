@@ -57,7 +57,7 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Нумерация DOCX | `python -m bench.numbering file.docx` | Расхождения наших номеров с рендером LibreOffice |
 | Выбор bi-encoder | `python -m bench.embeddings model ...` | recall@k и MRR поиска блока с ожидаемой цитатой, скорость на CPU |
 | Сквозной прогон | `python -m bench.pipeline --pages 20 --scan` | Время этапов, находки, полнота и точность по правилам, токены и стоимость |
-| Рассуждения модели | `python -m bench.pipeline --pages 20 --reasoning default,none --repeat 3` | Время анализа, токены рассуждений, стоимость, полнота и точность в каждом режиме `LLM_REASONING`; без кеша LLM, режимы чередуются |
+| Рассуждения модели | `python -m bench.pipeline --pages 20 --reasoning default,low,none --repeat 3` | Время анализа, токены рассуждений, стоимость, полнота и точность в каждом режиме `LLM_REASONING`; без кеша LLM, режимы чередуются |
 | Снимки парсера | `UPDATE_SNAPSHOTS=1 pytest tests/ml/test_snapshots.py` | Обновить эталонные снимки после ожидаемого изменения разбора |
 
 Без своих файлов стенды берут синтетический пакет из [`bench/samples.py`](../bench/samples.py): проект контракта и извещение с заложенными рисками R-01…R-08. Это не реальная закупка: цифры на нём проверяют конвейер, решения о моделях и порогах принимаются на открытых пакетах с zakupki.gov.ru.

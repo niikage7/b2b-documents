@@ -118,7 +118,7 @@ class LLMClient:
         self.cache = cache
         self.reasoning = reasoning_effort(self.settings.llm_reasoning)
         if self.reasoning and not self.openrouter:
-            log.warning("llm: LLM_REASONING=%s передаётся только OpenRouter, для %s не используется",
+            log.info("llm: LLM_REASONING=%s передаётся только OpenRouter, для %s не используется",
                         self.reasoning, self.base_url)
             self.reasoning = None
 

@@ -75,9 +75,11 @@ class Settings:
     )
     llm_temperature: float = field(default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.0))
     llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 4000))
-    # Рассуждения модели (только OpenRouter): пусто — как у модели по умолчанию, `none` — выключить,
+    # Рассуждения модели (только OpenRouter): `default` — как у модели, `none` — выключить,
     # `minimal` … `max` — уровень. Токены рассуждений входят в LLM_MAX_TOKENS и в стоимость.
-    llm_reasoning: str = field(default_factory=lambda: _env("LLM_REASONING", ""))
+    # По умолчанию `low`: на 20 страницах с уровнем модели (high) анализ падал в 3 из 4 прогонов —
+    # рассуждения съедали весь max_tokens; low — 25–30 с, none — 10–12 с при той же полноте (замер 27.10).
+    llm_reasoning: str = field(default_factory=lambda: _env("LLM_REASONING", "low"))
     llm_cache: bool = field(default_factory=lambda: _env("LLM_CACHE", "1") not in ("0", "false", ""))
 
     # Движок правил

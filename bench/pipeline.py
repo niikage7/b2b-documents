@@ -8,7 +8,7 @@
     python -m bench.pipeline                               # синтетический пакет
     python -m bench.pipeline --pages 20 --scan             # скан на 20 страниц
     python -m bench.pipeline a.docx b.pdf --expected expected.json
-    python -m bench.pipeline --pages 20 --reasoning default,none --repeat 3
+    python -m bench.pipeline --pages 20 --reasoning default,low,none --repeat 3
 
 `--reasoning` сравнивает режимы рассуждений модели (`LLM_REASONING`, только OpenRouter):
 анализ повторяется для каждого режима без кеша LLM, режимы чередуются, чтобы задержка
@@ -42,6 +42,7 @@ from ml.analysis.llm import REASONING_EFFORTS, LLMClient
 from ml.analysis.search import InMemorySearch
 from ml.checklist import load_default_checklist
 from ml.config import get_settings
+from ml.errors import MLError
 from ml.extract import extract_document
 
 
@@ -170,31 +171,46 @@ def compare_reasoning(docs: dict, groups, expected: list[dict], *, modes: list[s
                 print("\nLLM_REASONING действует только для OpenRouter: сравнение режимов не имеет смысла")
                 return
             print(f"\nрежим {mode}, прогон {i + 1} из {repeat}…", flush=True)
-            analysis = analyze(docs, groups, subject=subject, search=search, embedder=embedder, llm=client)
+            started = time.perf_counter()
+            try:
+                analysis = analyze(docs, groups, subject=subject, search=search, embedder=embedder, llm=client)
+            except MLError as exc:
+                # Сбой режима — тоже результат: записываем и идём дальше, а не теряем остальные режимы
+                print(f"  ошибка: {exc}")
+                rows.append((mode, i + 1, None, time.perf_counter() - started, exc.message))
+                continue
             if mode != "default" and client.reasoning_active is None:
                 print(f"  модель не приняла reasoning={mode}: прогон шёл с рассуждениями по умолчанию")
-            rows.append((mode, i + 1, analysis))
+            rows.append((mode, i + 1, analysis, sum(analysis.seconds.values()), None))
 
     print(f"\n{'режим':<9}{'прогон':>7}{'анализ, с':>11}{'вызовов':>9}{'вход':>8}{'выход':>8}"
           f"{'рассужд.':>10}{'$':>9}{'находок':>9}{'отброш.':>9}{'полнота':>10}{'точность':>10}")
-    for mode, n, a in rows:
+    for mode, n, a, seconds, error in rows:
+        if a is None:
+            print(f"{mode:<9}{n:>7}{seconds:>11.1f}  ошибка: {error}")
+            continue
         u = a.usage
         found = sum(len(v) for v in a.found.values())
         recall, precision = _totals(a.found, expected)
-        print(f"{mode:<9}{n:>7}{sum(a.seconds.values()):>11.1f}{u.calls:>9}{u.prompt_tokens:>8}"
+        print(f"{mode:<9}{n:>7}{seconds:>11.1f}{u.calls:>9}{u.prompt_tokens:>8}"
               f"{u.completion_tokens:>8}{u.reasoning_tokens:>10}{u.cost:>9.4f}{found:>9}{a.dropped:>9}"
               f"{recall:>10}{precision:>10}")
 
     print("\nПо режимам (время анализа — медиана и разброс по прогонам; токены и находки — в среднем на прогон):")
     for mode in modes:
-        runs = [a for m, _, a in rows if m == mode]
+        failed = sum(1 for m, _, a, _, _ in rows if m == mode and a is None)
+        runs = [a for m, _, a, _, _ in rows if m == mode and a is not None]
+        if not runs:
+            print(f"  {mode}: все прогоны ({failed}) с ошибкой")
+            continue
         times = [sum(a.seconds.values()) for a in runs]
         output = statistics.mean(a.usage.completion_tokens for a in runs)
         thinking = statistics.mean(a.usage.reasoning_tokens for a in runs)
         cost = statistics.mean(a.usage.cost for a in runs)
         found = statistics.mean(sum(len(v) for v in a.found.values()) for a in runs)
         print(f"  {mode}: {statistics.median(times):.1f} с ({min(times):.1f}–{max(times):.1f}), "
-              f"выход {output:.0f} ток., из них рассуждения {thinking:.0f}, ${cost:.4f}, находок {found:.1f}")
+              f"выход {output:.0f} ток., из них рассуждения {thinking:.0f}, ${cost:.4f}, находок {found:.1f}"
+              + (f"; с ошибкой — {failed} из {failed + len(runs)} прогонов" if failed else ""))
     if expected:
         print("  Полнота — найдено ожидаемых находок; точность — сколько находок совпало с эталоном.")
 

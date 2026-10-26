@@ -301,7 +301,8 @@ FILLER: list[Item] = [
 def long_contract(pages: int) -> list[Item]:
     """Договор нужной длины для замера скорости: основные разделы и повторяющиеся служебные."""
     items = list(CONTRACT)
-    while len(items) < pages * 14:
+    # При кегле 12 на лист входит около 20 пунктов: 403 пункта — ровно 20 страниц PDF
+    while len(items) < pages * 20:
         items.extend(FILLER)
     return items
 
