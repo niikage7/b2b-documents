@@ -253,3 +253,16 @@ def test_batch_passport(s, world):
     event = pipeline.set_batch_passport(s, world["batch_id"], passport)
     assert event["meta"]["passport"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
     assert batches.batch_view(s, world["batch_id"])["meta"]["passport"][0]["key"] == "nmck"
+
+
+def test_clarification_input(s, world):
+    from ml.analysis.clarification import draft_clarification
+
+    data = exports.clarification_input(s, world["batch_id"])
+    assert data["law"] == "44" and data["subject"] == SUBJECT
+    assert len(data["findings"]) == sum(1 for e in EXPECTED if e["doc"] == "contract")
+    assert all(f["filename"] == "Контракт.docx" for f in data["findings"])
+    picked = exports.clarification_input(s, world["batch_id"], finding_ids=[data["findings"][0]["id"]])
+    assert len(picked["findings"]) == 1
+    draft = draft_clarification(data["findings"], subject=data["subject"], law=data["law"], use_llm=False)
+    assert len(draft.items) == len(data["findings"]) and draft.items[0].section_number

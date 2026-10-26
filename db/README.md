@@ -78,6 +78,7 @@ TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bi
 | Экспорт | `exports.create_export`, `exports.finish_export`, `exports.export_view`; данные — `exports.export_payload(s, doc_id)` и `exports.batch_summary(s, batch_id)` |
 | Профили | `rules.list_profiles`, `create_profile`, `update_profile`, `delete_profile` |
 | Правила | `rules.list_rules`, `get_rule`, `create_rule`, `update_rule(s, id, data, version=)`, `delete_rule`, `system_variables` |
+| Запрос о даче разъяснений | `exports.clarification_input(s, batch_id, finding_ids=)` → `ml.draft_clarification(**data)` → `draft.as_text()` или `ml.render_clarification_docx` |
 | Очистка черновиков | `batches.expired_drafts(s)` — черновики старше 24 часов и ключи их файлов |
 
 `create_rule` и `update_rule` проверяют правило так же, как `ml.validate_rule`, плюс уникальность кода в профиле и лимит в 5 правил «Проверка ИИ» (`too_many_llm_rules`). `query_embedding` можно передать (`ml.embed_rule_query`) или не передавать: движок посчитает эмбеддинг строки поиска сам.

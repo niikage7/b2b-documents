@@ -21,6 +21,7 @@
 | `extract_passport` | analysis, параллельно с анализом | `ml.extract_passport([(document_id, filename, blocks), ...], search=PgVectorSearch(conn))` | `ProcurementPassport`: НМЦК, обеспечения, сроки поставки, приёмки и оплаты, гарантия, место поставки, дата окончания подачи заявок — у каждого значения цитата и место в документе. Пишется `db.pipeline.set_batch_passport` в `batch.meta` |
 | Старт анализа | analysis | `ml.group_rules(rules)` | Группы по 3–4 правила для chord |
 | `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов. Поиск читает все фрагменты документа и сам ранжирует их гибридом векторов и BM25 |
+| Запрос о даче разъяснений | export | `ml.draft_clarification(findings, subject=, customer=, procurement_number=, law=)`, затем `draft.as_text()` или `ml.render_clarification_docx(draft, path, sender=)` | Письмо заказчику по находкам пакета: все вопросы в одном запросе, цитата и пункт — из находки, формулировку вопроса пишет LLM. Вход — `db.exports.clarification_input(s, batch_id, finding_ids=)` |
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
 | Сид БД | — | `ml.load_default_checklist()` | Профиль «44-ФЗ, поставка товаров» и правила R-01…R-08 |
 

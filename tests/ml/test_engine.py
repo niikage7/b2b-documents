@@ -170,3 +170,39 @@ def test_passport_anchors_values_and_drops_invented(tmp_path, contract_blocks):
     assert passport.value("nmck") == "4 850 000,00 руб." and passport.value("advance") is None
     prompt = fake.requests[0]["messages"][-1]["content"]
     assert "Гарантийный срок на Товар" in prompt and "Размер обеспечения исполнения" in prompt
+
+
+def test_clarification_draft(tmp_path):
+    from docx import Document
+
+    from ml.analysis.clarification import draft_clarification, render_clarification_docx
+
+    findings = [
+        {"id": "f1", "quote": "в течение 3 (трёх) календарных дней с даты заключения Контракта", "section_number": "3.1",
+         "page": 2, "filename": "Контракт.docx", "rule": {"title": "Срок поставки короче разумного"},
+         "explanation": "Срок 3 дня нереален для серверов под заказ.",
+         "recommendation": "Направить запрос на разъяснение и предложить срок не менее 30 дней."},
+        {"id": "f2", "quote": "лицензию ФСБ России", "section_number": None, "page": 1,
+         "document": {"filename": "Извещение.docx"}, "explanation": "", "recommendation": ""},
+        {"id": "f3", "quote": "  ", "section_number": "1.1"},  # пустая цитата — не вопрос
+    ]
+    offline = draft_clarification(findings, subject="поставка серверов", customer="ФКУ «ЦОД»",
+                                  procurement_number="0373100000126000045", use_llm=False)
+    assert [i.finding_id for i in offline.items] == ["f1", "f2"]
+    assert offline.items[0].request == ("Просим разъяснить данное условие. Срок 3 дня нереален для серверов под заказ. "
+                                        "Предлагаем срок не менее 30 дней.")
+    assert offline.intro.startswith("В соответствии с частью 5 статьи 42") and "0373100000126000045" in offline.intro
+    text = offline.as_text()
+    assert "1. В пункте 3.1 документа «Контракт.docx» установлено:" in text
+    assert "2. На странице 1 документа «Извещение.docx»" in text
+
+    fake = FakeLLM()
+    drafted = draft_clarification(findings, llm=fake.client(), law="223")
+    assert [i.request for i in drafted.items] == ["Просим разъяснить условие 1.", "Просим разъяснить условие 2."]
+    assert "223-ФЗ" in drafted.intro and "«в течение 3 (трёх)" in fake.requests[0]["messages"][-1]["content"]
+
+    path = render_clarification_docx(offline, tmp_path / "Запрос.docx", sender="ООО «Северный терминал»")
+    paragraphs = [p.text for p in Document(str(path)).paragraphs]
+    assert paragraphs[0] == "Заказчику: ФКУ «ЦОД»" and any("ЗАПРОС О ДАЧЕ РАЗЪЯСНЕНИЙ" in p for p in paragraphs)
+    assert any(p.startswith("1. В пункте 3.1") for p in paragraphs)
+    assert any("ООО «Северный терминал»" in p for p in paragraphs)

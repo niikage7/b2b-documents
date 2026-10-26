@@ -69,6 +69,10 @@ class FakeLLM:
             m = re.search(r"Наименование объекта закупки:\s*([^\n.]+)", prompt)
             content = json.dumps({"subject": m.group(1) if m else None}, ensure_ascii=False)
             return _ok(content)
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "clarification_request":
+            n = len(re.findall(r"^\[(\d+)\]", prompt, re.M))
+            items = [{"index": i, "request": f"Просим разъяснить условие {i}."} for i in range(1, n + 1)]
+            return _ok(json.dumps({"items": items}, ensure_ascii=False))
         if body.get("response_format", {}).get("json_schema", {}).get("name") == "procurement_passport":
             fields = [{"key": key, "value": value, "fragment": _fragment_of(prompt, quote), "quote": quote}
                       for key, (value, quote) in self.passport.items()]

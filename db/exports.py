@@ -78,6 +78,37 @@ def export_view(s: Session, export_id) -> dict:
             "expires_at": iso(export.expires_at)}
 
 
+# --- Запрос о даче разъяснений ---------------------------------------------------------------
+
+
+def clarification_input(s: Session, batch_id, *, finding_ids=None) -> dict:
+    """Вход `ml.draft_clarification`: находки пакета (выбранные или все активные) и данные закупки.
+
+    Ручные пометки входят наравне с находками ИИ; порядок — по документам и местам в тексте.
+    """
+    batch = s.get(Batch, _id(batch_id))
+    if batch is None:
+        raise NotFound("Пакет не найден")
+    q = select(Finding).where(Finding.batch_id == batch.id)
+    if finding_ids:
+        q = q.where(Finding.id.in_([_id(f) for f in finding_ids]))
+    else:
+        q = q.where(Finding.status != "rejected")
+    rows = s.scalars(q).all()
+    docs = {d.id: d for d in s.scalars(select(Document).where(Document.batch_id == batch.id))}
+    items = []
+    for f, item in zip(rows, findings_payload(s, rows), strict=True):
+        doc = docs.get(f.document_id)
+        items.append(item | {"filename": doc.filename if doc else None,
+                             "_order": (doc.original_path if doc else "", item["order"] or 0, f.start)})
+    items.sort(key=lambda x: x.pop("_order"))
+    passport = {p["key"]: p["value"] for p in (batch.meta or {}).get("passport", [])}
+    profile = s.get(RuleProfile, batch.profile_id)
+    law = "223" if profile and "223" in f"{profile.name} {profile.short_name}" else "44"
+    return {"findings": items, "subject": batch.subject or passport.get("subject"),
+            "customer": passport.get("customer"), "procurement_number": passport.get("number"), "law": law}
+
+
 # --- Данные для разметки ---------------------------------------------------------------------
 
 
