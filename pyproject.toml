@@ -28,6 +28,14 @@ pg = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
 ]
+# Слой данных: таблицы, миграции, функции для API и задач Celery (каталог db/)
+db = [
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    "argon2-cffi>=23.1",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -38,10 +46,11 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["contracts*", "ml*"]
+include = ["contracts*", "ml*", "db*"]
 
 [tool.setuptools.package-data]
 "ml.checklist" = ["*.json"]
+"db" = ["alembic.ini", "migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
