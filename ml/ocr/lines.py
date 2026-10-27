@@ -1,9 +1,15 @@
-"""Строки скана по геометрии и повторное чтение номеров пунктов с выступом.
+"""Строки скана по геометрии и повторное чтение того, что `--psm 3` прочитал плохо или пропустил.
 
 В режиме `--psm 3` Tesseract относит номер пункта с выступом («1.2.» левее текста) к
 отдельному блоку и читает его без контекста строки: «1.2.» превращается в «Га» или
-«V1,». Такие номера перечитываются вместе с началом своей строки: все кропы страницы
-складываются в одно изображение столбиком и читаются одним вызовом `--psm 6`.
+«V1,». Такие номера перечитываются вместе с началом своей строки.
+
+Короткие одиночные надписи — значения в узких колонках таблиц ТЗ («≥ 4», «Да», «2») —
+разметка страницы принимает за шум и не читает вовсе: у них нет ни одной рамки. Пятна
+чернил размером со строку, которые не покрыты ни одним словом, дочитываются отдельно.
+
+В обоих случаях кропы страницы складываются в одно изображение столбиком и читаются
+одним вызовом `--psm 6`.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ from __future__ import annotations
 import logging
 import statistics
 
+import cv2
 import numpy as np
 from rapidfuzz import fuzz
 
@@ -22,6 +29,13 @@ PREFIX_MAX_CHARS = 8
 CONTEXT_WORDS = 3
 GAP = 24
 PAD = 6
+MISSED_MIN_HEIGHT = 0.4
+MISSED_MAX_HEIGHT = 2.0
+"""Пятно дочитывается, если его высота — от 0,4 до 2 медианной высоты слова: точки и
+крапины меньше, подписи, печати и рисунки больше."""
+MISSED_MARGIN = 1.0
+MISSED_MAX_SPOTS = 200
+MISSED_MIN_CONF = 0.5
 
 
 def pixel_lines(words: list[TsvWord]) -> list[list[TsvWord]]:
@@ -117,3 +131,75 @@ def refine_detached_prefixes(img: np.ndarray, words: list[TsvWord], *, lang: str
             words.remove(extra)
         fixed += 1
     return fixed
+
+
+def _read_sheet(img: np.ndarray, boxes: list[tuple[int, int, int, int]], *, lang: str, dpi: int,
+                timeout: float) -> list[list[TsvWord]]:
+    """Кропы `boxes` (x0, y0, x1, y1) столбиком на одном листе, `--psm 6`. Слова каждого
+    кропа — в координатах страницы."""
+    crops = [img[y0:y1, x0:x1] for x0, y0, x1, y1 in boxes]
+    width = max(c.shape[1] for c in crops) + 2 * GAP
+    height = sum(c.shape[0] for c in crops) + GAP * (len(crops) + 1)
+    sheet = np.full((height, width), 255, dtype=np.uint8)
+    bands = []
+    y = GAP
+    for crop in crops:
+        sheet[y : y + crop.shape[0], GAP : GAP + crop.shape[1]] = crop
+        bands.append((y, y + crop.shape[0]))
+        y += crop.shape[0] + GAP
+    result = recognize(sheet, lang=lang, dpi=dpi, psm=6, timeout=timeout)
+    out: list[list[TsvWord]] = []
+    for (x0, y0, _, _), (top, bottom) in zip(boxes, bands, strict=True):
+        found = []
+        for w in result:
+            if top - GAP / 2 <= w.top + w.height / 2 <= bottom + GAP / 2:
+                found.append(TsvWord(w.block, w.par, w.line, w.left - GAP + x0, w.top - top + y0,
+                                     w.width, w.height, w.conf, w.text))
+        out.append(sorted(found, key=lambda w: w.left))
+    return out
+
+
+def recover_missed_text(img: np.ndarray, words: list[TsvWord], *, lang: str, dpi: int,
+                        timeout: float = 60) -> int:
+    """Дочитывает пятна чернил размером со строку, не покрытые словами. Возвращает число
+    добавленных слов; у каждого пятна свой блок, чтобы сборка строк считала его отдельной строкой."""
+    if not words:
+        return 0
+    height = statistics.median(w.height for w in words)
+    _, ink = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Рамка слова не всегда покрывает буквы целиком («в», кружок «№»): вокруг слова закрывается
+    # поле в высоту строки, иначе хвост буквы дочитывался бы отдельным словом. Значения ячеек
+    # стоят дальше от соседнего текста — через границу колонки
+    dx, dy = int(height * MISSED_MARGIN), int(height * MISSED_MARGIN / 2)
+    for w in words:
+        ink[max(0, w.top - dy) : w.top + w.height + dy, max(0, w.left - dx) : w.left + w.width + dx] = 0
+    # Буквы одной надписи сливаются в одно пятно, соседние колонки — нет
+    kernel = np.ones((max(1, int(height * 0.2)), max(1, int(height * 0.8))), np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(cv2.dilate(ink, kernel), connectivity=8)
+    boxes = []
+    for x, y, w, h, _ in stats[1:n]:
+        # Размер пятна — по чернилам внутри, без расширения ядром
+        ys, xs = np.nonzero(ink[y : y + h, x : x + w])
+        if len(xs) == 0:
+            continue
+        x0, x1, y0, y1 = x + xs.min(), x + xs.max() + 1, y + ys.min(), y + ys.max() + 1
+        if not MISSED_MIN_HEIGHT * height <= y1 - y0 <= MISSED_MAX_HEIGHT * height:
+            continue
+        boxes.append((max(0, x0 - PAD), max(0, y0 - PAD), min(img.shape[1], x1 + PAD), min(img.shape[0], y1 + PAD)))
+    if not boxes:
+        return 0
+    if len(boxes) > MISSED_MAX_SPOTS:
+        log.debug("ocr: непрочитанных пятен %d, дочитываются первые %d", len(boxes), MISSED_MAX_SPOTS)
+        boxes = boxes[:MISSED_MAX_SPOTS]
+    block = max(w.block for w in words) + 1
+    added = 0
+    for found in _read_sheet(img, boxes, lang=lang, dpi=dpi, timeout=timeout):
+        kept = [w for w in found if w.conf >= MISSED_MIN_CONF]
+        for w in kept:
+            w.block, w.par, w.line = block, 1, 1
+            words.append(w)
+        if kept:
+            log.debug("ocr: дочитано %r", " ".join(w.text for w in kept))
+            added += len(kept)
+            block += 1
+    return added

@@ -25,7 +25,8 @@ from contracts.extraction import BBox, OcrPage, OcrWord
 from ml.config import PIPELINE_VERSION, get_settings
 from ml.convert import file_sha256
 from ml.extract.pdf_extract import open_pdf
-from ml.ocr.lines import pixel_lines, refine_detached_prefixes
+from ml.ocr.correct import correct_words
+from ml.ocr.lines import pixel_lines, recover_missed_text, refine_detached_prefixes
 from ml.ocr.preprocess import Prepared, prepare_image, render
 from ml.ocr.tesseract import TsvWord, recognize, tesseract_version
 
@@ -82,7 +83,9 @@ def clean_words(words: list[TsvWord]) -> list[TsvWord]:
 def _page_result(no: int, width: float, height: float, prep: Prepared, words: list[TsvWord]) -> OcrPage:
     settings = get_settings()
     out: list[OcrWord] = []
-    for w in clean_words(words):
+    kept = clean_words(words)
+    correct_words(kept)
+    for w in kept:
         x0, y0, x1, y1 = prep.to_page(w.left, w.top, w.left + w.width, w.top + w.height)
         scale = 72 / prep.dpi
         out.append(
@@ -153,6 +156,7 @@ def ocr_pages(
             prep = prepare_image(original, dpi)
             words = recognize(prep.image, lang=lang, dpi=dpi, timeout=settings.ocr_timeout)
             refine_detached_prefixes(prep.image, words, lang=lang, dpi=dpi, timeout=settings.ocr_timeout)
+            recover_missed_text(prep.image, words, lang=lang, dpi=dpi, timeout=settings.ocr_timeout)
             result = _page_result(no, width, height, prep, words)
             if images_dir is not None:
                 result.image_key = str(images_dir / f"page-{no:04d}.jpg")
