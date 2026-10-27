@@ -91,3 +91,63 @@ def test_ocr_cache_and_progress(tmp_path, contract_pdf):
     assert (tmp_path / "img" / "page-0001.jpg").exists()
     again = ocr_pages(scan, [1])
     assert again[0].words == first[0].words
+
+
+def test_ocr_pages_streams_in_order(tmp_path, monkeypatch):
+    """Страницы возвращаются в порядке запроса, прогресс растёт по одной, а рендеров в работе
+    не больше 2×pool: скан на сотни страниц не держит все изображения в памяти."""
+    import threading
+    import time
+
+    import ml.ocr.pages as pages_mod
+    from ml.ocr.tesseract import TsvWord
+
+    doc = pymupdf.open()
+    for _ in range(7):
+        doc.new_page(width=200, height=200)
+    path = tmp_path / "blank.pdf"
+    doc.save(path)
+
+    lock = threading.Lock()
+    state = {"in_flight": 0, "peak": 0}
+    real_render = pages_mod.render
+
+    def fake_render(page, dpi):
+        with lock:
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+        return real_render(page, 30)
+
+    def fake_recognize(img, **_):
+        with lock:
+            state["in_flight"] -= 1
+        time.sleep(0.02)  # без ограничения рендер за это время ушёл бы на все страницы вперёд
+        return [TsvWord(1, 1, 1, 10, 10, 40, 12, 0.9, "слово")]
+
+    monkeypatch.setattr(pages_mod, "render", fake_render)
+    monkeypatch.setattr(pages_mod, "prepare_image", lambda img, dpi: Prepared(image=img, dpi=dpi))
+    monkeypatch.setattr(pages_mod, "recognize", fake_recognize)
+    monkeypatch.setattr(pages_mod, "refine_detached_prefixes", lambda *a, **k: None)
+    calls = []
+    order = [5, 1, 7, 2, 6, 3, 4]
+    result = ocr_pages(path, order, workers=1, use_cache=False, progress=lambda d, t: calls.append((d, t)))
+    assert [p.page for p in result] == order
+    assert calls == [(i, 7) for i in range(8)]
+    assert state["peak"] <= 2
+
+
+def test_orientation_falls_back_to_full_size(monkeypatch):
+    import ml.ocr.preprocess as pp
+    from ml.ocr.tesseract import Orientation
+
+    seen = []
+
+    def fake_detect(img, *, dpi=300, timeout=30):
+        seen.append((img.shape, dpi))
+        return Orientation(90, 1.0) if dpi < 300 else Orientation(180, 12.0)
+
+    monkeypatch.setattr(pp, "detect_orientation", fake_detect)
+    img = np.full((400, 300), 255, np.uint8)
+    found = pp.page_orientation(img, 300)
+    assert seen == [((200, 150), 150), ((400, 300), 300)]
+    assert found == Orientation(180, 12.0)

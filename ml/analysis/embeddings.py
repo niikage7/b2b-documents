@@ -81,17 +81,23 @@ class SentenceTransformerEmbedder:
             return []
         prefix = self.query_prefix if kind == "query" else self.passage_prefix
         model = self._load()
+        # Одинаковые тексты кодируются один раз: в ТЗ повторяются обоснования характеристик и
+        # шапки таблиц — на трёх открытых пакетах 8% фрагментов
+        unique = list(dict.fromkeys(texts))
         # Префикс — через `prompt`: так он заменяет промпт модели по умолчанию (у BERTA это
         # «Classification»), а не добавляется к нему
         vectors = model.encode(
-            list(texts),
+            unique,
             prompt=prefix,
             batch_size=self.batch_size,
             normalize_embeddings=True,
             convert_to_numpy=True,
             show_progress_bar=False,
-        )
-        return vectors.astype("float32").tolist()
+        ).astype("float32").tolist()
+        if len(unique) == len(texts):
+            return vectors
+        by_text = dict(zip(unique, vectors, strict=True))
+        return [list(by_text[t]) for t in texts]
 
 
 _default: Embedder | None = None

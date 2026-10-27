@@ -13,18 +13,20 @@ import json
 import logging
 import os
 import statistics
+from collections import deque
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from contracts.extraction import BBox, OcrPage, OcrWord
 from ml.config import PIPELINE_VERSION, get_settings
 from ml.convert import file_sha256
 from ml.extract.pdf_extract import open_pdf
 from ml.ocr.lines import pixel_lines, refine_detached_prefixes
-from ml.ocr.preprocess import Prepared, prepare
+from ml.ocr.preprocess import Prepared, prepare_image, render
 from ml.ocr.tesseract import TsvWord, recognize, tesseract_version
 
 log = logging.getLogger(__name__)
@@ -139,36 +141,44 @@ def ocr_pages(
     if progress:
         progress(done, len(pages))
     if todo:
-        # Рендер — в этом потоке (PyMuPDF не потокобезопасен), Tesseract — отдельными процессами
-        jobs: list[tuple[int, float, float, Prepared]] = []
-        with open_pdf(path) as doc:
-            for no in todo:
-                page = doc[no - 1]
-                prep, original = prepare(page, dpi)
-                if images_dir is not None:
-                    images_dir.mkdir(parents=True, exist_ok=True)
-                    image_path = images_dir / f"page-{no:04d}.jpg"
-                    cv2.imwrite(str(image_path), original, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                jobs.append((no, page.rect.width, page.rect.height, prep))
         pool = workers or max(1, min(4, os.cpu_count() or 1))
+        if images_dir is not None:
+            images_dir.mkdir(parents=True, exist_ok=True)
 
-        def run(job: tuple[int, float, float, Prepared]) -> OcrPage:
-            no, width, height, prep = job
+        def run(no: int, width: float, height: float, original: np.ndarray) -> OcrPage:
+            # Всё, кроме рендера, — в потоке: OpenCV и Tesseract отпускают GIL. Подготовка в главном
+            # потоке шла подряд для всех страниц и занимала половину времени скана (замер 27.10)
+            if images_dir is not None:
+                cv2.imwrite(str(images_dir / f"page-{no:04d}.jpg"), original, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            prep = prepare_image(original, dpi)
             words = recognize(prep.image, lang=lang, dpi=dpi, timeout=settings.ocr_timeout)
             refine_detached_prefixes(prep.image, words, lang=lang, dpi=dpi, timeout=settings.ocr_timeout)
-            return _page_result(no, width, height, prep, words)
+            result = _page_result(no, width, height, prep, words)
+            if images_dir is not None:
+                result.image_key = str(images_dir / f"page-{no:04d}.jpg")
+            return result
 
-        with ThreadPoolExecutor(max_workers=pool) as executor:
-            for result in executor.map(run, jobs):
-                if images_dir is not None:
-                    result.image_key = str(images_dir / f"page-{result.page:04d}.jpg")
-                results[result.page] = result
-                if use_cache:
-                    target = cache_dir / f"{_cache_key(digest, result.page, dpi, lang)}.json"
-                    tmp = target.with_suffix(f".{os.getpid()}.tmp")
-                    tmp.write_text(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
-                    os.replace(tmp, target)
-                done += 1
-                if progress:
-                    progress(done, len(pages))
+        def finish(result: OcrPage) -> None:
+            nonlocal done
+            results[result.page] = result
+            if use_cache:
+                target = cache_dir / f"{_cache_key(digest, result.page, dpi, lang)}.json"
+                tmp = target.with_suffix(f".{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+                os.replace(tmp, target)
+            done += 1
+            if progress:
+                progress(done, len(pages))
+
+        # Рендер — в этом потоке (PyMuPDF не потокобезопасен). В работе не больше 2×pool страниц:
+        # рендер 300 dpi — около 9 МБ на лист, скан на 500 страниц целиком занял бы 4 ГБ
+        pending: deque[Future[OcrPage]] = deque()
+        with open_pdf(path) as doc, ThreadPoolExecutor(max_workers=pool) as executor:
+            for no in todo:
+                page = doc[no - 1]
+                pending.append(executor.submit(run, no, page.rect.width, page.rect.height, render(page, dpi)))
+                if len(pending) >= 2 * pool:
+                    finish(pending.popleft().result())
+            while pending:
+                finish(pending.popleft().result())
     return [results[no] for no in pages]

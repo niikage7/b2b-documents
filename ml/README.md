@@ -25,7 +25,7 @@
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
 | Сид БД | — | `ml.load_default_checklist()` | Профиль «44-ФЗ, поставка товаров» и правила R-01…R-08 |
 
-Ошибки — классы из [`ml/errors.py`](errors.py) с полями `code` и `message` (текст на русском, его показывают как есть) и признаком `retryable`. PyMuPDF не работает в нескольких потоках: всё, что открывает PDF, должно идти в воркерах с пулом процессов. Прогресс OCR отдаётся колбэком `progress(done, total)` — его удобно связать с `report_progress`.
+Ошибки — классы из [`ml/errors.py`](errors.py) с полями `code` и `message` (текст на русском, его показывают как есть) и признаком `retryable`. PyMuPDF не работает в нескольких потоках: всё, что открывает PDF, должно идти в воркерах с пулом процессов. `ocr_pages` рендерит страницы в своём потоке, а подготовку и Tesseract ведёт в пуле до четырёх потоков и держит в работе не больше двух страниц на поток: память не растёт с длиной скана. Прогресс OCR отдаётся колбэком `progress(done, total)` — его удобно связать с `report_progress`.
 
 `analyze_rule_group` принимает любые блоки с полями `id`, `order`, `text`, `number`, `page`, `section_number` — например, Pydantic-модели блока. Раздел находки `merge_findings` берёт из блока `block_id`, а не из ответа LLM.
 
@@ -60,6 +60,7 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Генератор сканов | `python -m bench.scangen src.pdf scan.pdf` | Скан 300 dpi: серый фон, наклон до 0,6°, шум, JPEG |
 | Нумерация DOCX | `python -m bench.numbering file.docx` | Расхождения наших номеров с рендером LibreOffice |
 | Выбор bi-encoder и поиска | `python -m bench.embeddings model ... [--chunk-tokens 60,100,400]` | Доля пунктов с риском в фрагментах правила при бюджете токенов: векторный поиск, BM25, гибрид; скорость на CPU |
+| Поиск для паспорта | `python -m bench.passport [--budget 400,800] [--llm]` | Доля полей паспорта, значение которых попало во фрагменты запроса, на трёх открытых пакетах; с `--llm` — заполнение и сверка значений |
 | Сквозной прогон | `python -m bench.pipeline --pages 20 --scan` | Время этапов, находки, полнота и точность по правилам, токены и стоимость |
 | Рассуждения модели | `python -m bench.pipeline --pages 20 --reasoning default,low,none --repeat 3` | Время анализа, токены рассуждений, стоимость, полнота и точность в каждом режиме `LLM_REASONING`; без кеша LLM, режимы чередуются |
 | Модели решений и LLM | `python -m bench.decisions [--context 4] [--variant prompt,desc]` | Jev и Clef против LLM на размеченных пунктах `bench/clauses.py`: AUC, полнота и точность, доля пар для LLM без потерь, задержка, стоимость |

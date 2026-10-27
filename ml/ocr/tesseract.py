@@ -118,10 +118,10 @@ class Orientation:
     confidence: float
 
 
-def detect_orientation(img: np.ndarray, *, timeout: float = 30) -> Orientation | None:
+def detect_orientation(img: np.ndarray, *, dpi: int = 300, timeout: float = 30) -> Orientation | None:
     """Ориентация по `--psm 0`. Мало текста на странице — None, страница остаётся как есть."""
     try:
-        out = _run(["--psm", "0", "--dpi", "300"], _png(img), timeout)
+        out = _run(["--psm", "0", "--dpi", str(dpi)], _png(img), timeout)
     except OcrError:
         return None
     rotate = re.search(r"Rotate:\s*(\d+)", out)
