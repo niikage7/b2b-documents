@@ -209,8 +209,8 @@ def update_finding(s: Session, finding_id, *, actor_id, version: int, status: st
     if target == "new":
         f.decided_by = None
         f.decided_at = None
-        if f.status == "edited":
-            f.level = f.original_level
+        # Уровень мог смениться и при «Принять» с новым уровнем, а не только при «Изменить»
+        f.level = f.original_level
     elif target != f.status or edits:
         f.decided_by = _id(actor_id)
         f.decided_at = _now()

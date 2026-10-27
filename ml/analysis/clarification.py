@@ -109,6 +109,19 @@ _REQUEST = re.compile(
 )
 
 
+def _group_index(index: int, group: list[int]) -> int | None:
+    """Номер условия из ответа модели → сквозной номер в пределах своей группы.
+
+    Модель может вернуть сквозной номер («7» для первого условия второй группы) или номер внутри
+    группы («1»). Номер чужой группы не принимается: иначе ответ затёр бы вопрос другого условия.
+    """
+    if index in group:
+        return index
+    if 1 <= index <= len(group):
+        return group[index - 1]
+    return None
+
+
 def _fallback(finding: dict) -> str:
     """Вопрос без LLM: просьба разъяснить, пояснение риска и предложение из рекомендации.
 
@@ -177,7 +190,7 @@ def draft_clarification(
 
         with ThreadPoolExecutor(max_workers=min(len(groups), get_settings().llm_max_concurrency)) as pool:
             futures = [pool.submit(ask, g) for g in groups]
-            for future in futures:
+            for group, future in zip(groups, futures, strict=True):
                 try:
                     answer = future.result()
                 except LLMError as exc:
@@ -185,8 +198,9 @@ def draft_clarification(
                     continue
                 usage.add(answer.usage)
                 for req in answer.data.items:
-                    if 1 <= req.index <= len(items) and req.request.strip():
-                        items[req.index - 1].request = req.request.strip()
+                    index = _group_index(req.index, [i for i, _ in group])
+                    if index is not None and req.request.strip():
+                        items[index - 1].request = req.request.strip()
 
     basis = LEGAL_BASIS.get(law, LEGAL_BASIS["44"])
     about = f" № {procurement_number}" if procurement_number else ""

@@ -101,8 +101,8 @@ def search_document(s: Session, document_id, q: str) -> dict:
     matches = []
     pattern = re.compile(re.escape(query))
     rows = s.execute(select(BlockRow.id, BlockRow.text, BlockRow.page)
-                     .where(BlockRow.document_id == doc.id, func.lower(BlockRow.text).contains(q.strip().lower())
-                            | func.replace(func.lower(BlockRow.text), "ё", "е").contains(query))
+                     .where(BlockRow.document_id == doc.id, func.lower(BlockRow.text).contains(q.strip().lower(), autoescape=True)
+                            | func.replace(func.lower(BlockRow.text), "ё", "е").contains(query, autoescape=True))
                      .order_by(BlockRow.order)).all()
     for block_id, text, page in rows:
         for m in pattern.finditer(_fold(text)):

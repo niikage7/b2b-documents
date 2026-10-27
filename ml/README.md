@@ -80,8 +80,6 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 
 | С кем | Вопрос |
 | --- | --- |
-| Андрей, Влад | Контракт 2 ([`contracts/extraction.py`](../contracts/extraction.py)) — черновик: поля `RawParagraph`, карта runs и рамки слов |
-| Андрей | Уровень находки берётся из правила, LLM его не выбирает; корень ответа LLM — объект `{"rules": [...]}` ([`contracts/analysis.py`](../contracts/analysis.py)) |
+| Влад | Контракт 2 ([`contracts/extraction.py`](../contracts/extraction.py)) — черновик: поля `RawParagraph`, карта runs и рамки слов |
 | Влад | `ocr_pages` возвращает только слова, абзацы собирает `build_pdf_result` после всех групп — это меняет контракт 3 |
 | Влад | Рамки в системе координат `page.get_text`: подсветка `add_highlight_annot` на странице с `/Rotate 90` проверена тестом |
-| Команда | Модель эмбеддингов: от неё зависит `vector(768)`; стенд выбора — `bench.embeddings` |

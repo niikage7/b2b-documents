@@ -140,6 +140,16 @@ def test_review_flow_and_conflicts(s, world):
     assert out["batch"]["worst_level"] is None  # пакет ещё в работе: finish_batch не вызван
 
 
+def test_reopen_restores_level_after_accept_with_new_level(s, world):
+    user = world["user"]
+    warning = next(f for f in documents.document_view(s, world["doc"].id)["findings"] if f["level"] == "warning")
+    accepted = findings.update_finding(s, warning["id"], actor_id=user.id, version=warning["version"],
+                                       status="accepted", level="critical")
+    assert accepted["finding"]["status"] == "accepted" and accepted["finding"]["level"] == "critical"
+    back = findings.update_finding(s, warning["id"], actor_id=user.id, version=warning["version"] + 1, status="new")
+    assert back["finding"]["level"] == "warning" and back["finding"]["decided_by"] is None
+
+
 def test_user_findings(s, world):
     user = world["user"]
     other = users.create_user(s, login="other", password="x" * 8, full_name="Пётр Иванов", role="specialist")
@@ -208,6 +218,9 @@ def test_rules_crud_and_versions(s, world):
     with pytest.raises(VersionConflict):
         rules.update_rule(s, made["id"], {"enabled": False}, version=1)
     assert any(r["code"] == "R-09" for r in rules.list_rules(s, profile_id=profile_id, search="аванс"))
+    # «%» и «_» в строке поиска — обычные символы, а не шаблон LIKE
+    assert rules.list_rules(s, profile_id=profile_id, search="%") == []
+    assert rules.list_rules(s, profile_id=profile_id, search="R_0") == []
 
     # Пакет, запущенный до правки, проверяется старыми версиями; новый — новыми
     old_specs = {r.code for r in pipeline.batch_rules(s, world["batch_id"])}
@@ -232,11 +245,21 @@ def test_seed_is_idempotent_and_auth(s):
     assert again == {"profile": False, "rules": 0, "users": 0}
     user = users.authenticate(s, "Lawyer", "demo-pass")
     assert users.me(user)["role_label"] == "Юрист"
+    with pytest.raises(users.AuthError):
+        users.authenticate(s, "nobody", "demo-pass")
     for _ in range(users.MAX_FAILED):
         with pytest.raises(users.AuthError):
             users.authenticate(s, "lawyer", "wrong")
     with pytest.raises(users.TooManyAttempts):
         users.authenticate(s, "lawyer", "demo-pass")
+
+
+def test_task_run_attempts(s, world):
+    batch_id, doc_id = world["batch_id"], world["doc"].id
+    batch_runs = [pipeline.start_task_run(s, batch_id=batch_id, stage="unpack").attempt for _ in range(2)]
+    doc_runs = [pipeline.start_task_run(s, batch_id=batch_id, stage="ocr", document_id=doc_id).attempt
+                for _ in range(2)]
+    assert batch_runs == [1, 2] and doc_runs == [1, 2]
 
 
 def test_merge_ignores_unknown_blocks(s, world):

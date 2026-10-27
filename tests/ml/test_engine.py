@@ -233,3 +233,25 @@ def test_clarification_draft(tmp_path):
     assert paragraphs[0] == "Заказчику: ФКУ «ЦОД»" and any("ЗАПРОС О ДАЧЕ РАЗЪЯСНЕНИЙ" in p for p in paragraphs)
     assert any(p.startswith("1. В пункте 3.1") for p in paragraphs)
     assert any("ООО «Северный терминал»" in p for p in paragraphs)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_clarification_groups_keep_own_answers(relative):
+    """Ответ второй группы не затирает вопросы первой, как бы модель ни нумеровала условия."""
+    import json
+    import re
+
+    from ml.analysis.clarification import GROUP, draft_clarification
+    from tests.fakes import _ok, make_client
+
+    def handler(request):
+        prompt = json.loads(request.content)["messages"][-1]["content"]
+        numbers = [int(n) for n in re.findall(r"^\[(\d+)\]", prompt, re.M)]
+        items = [{"index": pos if relative else n, "request": f"Вопрос по условию {n}."}
+                 for pos, n in enumerate(numbers, 1)]
+        return _ok(json.dumps({"items": items}, ensure_ascii=False))
+
+    findings = [{"id": f"f{i}", "quote": f"условие номер {i}", "explanation": "", "recommendation": ""}
+                for i in range(1, GROUP + 3)]
+    draft = draft_clarification(findings, llm=make_client(handler))
+    assert [i.request for i in draft.items] == [f"Вопрос по условию {i}." for i in range(1, GROUP + 3)]

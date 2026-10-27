@@ -42,6 +42,10 @@ log = logging.getLogger(__name__)
 PASSPORT_VERSION = "2026-10-27"
 FIELD_BUDGET_TOKENS = 400
 """Сколько текста получает каждое поле из всех документов пакета: условие обычно в одном пункте."""
+ANSWER_TOKENS_PER_FIELD = 200
+"""Предел ответа на поле: значение до 120 знаков и цитата до 300 — около 150 токенов с JSON.
+При 1500 токенах на 15 полей длинные цитаты обрезали бы ответ, а повторный запрос на
+исправление стоит вдвое; оплачиваются только выданные токены."""
 
 
 @dataclass(frozen=True)
@@ -186,7 +190,7 @@ def extract_passport(
     client = llm or default_client()
     try:
         answer = client.chat(_render(fields, fragments), _PassportAnswer, schema_name="procurement_passport",
-                             max_tokens=1500, reasoning="none")
+                             max_tokens=200 + ANSWER_TOKENS_PER_FIELD * len(fields), reasoning="none")
     except LLMError as exc:
         log.warning("passport: LLM недоступна, паспорт не заполнен: %s", exc)
         return passport
@@ -201,7 +205,9 @@ def extract_passport(
             continue
         preferred = fragment_blocks.get(item.fragment or 0)
         candidates = preferred[1] if preferred else [b for _, b in all_blocks]
-        rest = [b for _, b in all_blocks if b not in candidates]
+        # По объекту, а не по ==: сравнение моделей блока по всем полям на каждом шаге — квадратично
+        taken = {id(b) for b in candidates}
+        rest = [b for _, b in all_blocks if id(b) not in taken]
         anchor, score = anchor_quote(item.quote, candidates, fallback=rest)
         if anchor is None:
             log.info("passport: %s отброшено, цитата не найдена (балл %.0f): %.80s", item.key, score, item.quote)

@@ -202,9 +202,11 @@ def _filtered(q: Select, *, user_id, search: str | None, status: str, period: st
     elif status == "error":
         q = q.where(Batch.status == "partial_error")
     if search and search.strip():
-        like = f"%{search.strip()}%"
-        q = q.where(or_(Batch.name.ilike(like),
-                        exists().where(and_(Document.batch_id == Batch.id, Document.filename.ilike(like)))))
+        # autoescape: «%» и «_» из строки поиска — обычные символы, а не шаблон LIKE
+        text = search.strip()
+        q = q.where(or_(Batch.name.icontains(text, autoescape=True),
+                        exists().where(and_(Document.batch_id == Batch.id,
+                                            Document.filename.icontains(text, autoescape=True)))))
     return q
 
 

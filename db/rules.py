@@ -198,8 +198,8 @@ def list_rules(s: Session, *, profile_id=None, search: str | None = None, kind: 
     q = select(Rule).where(Rule.deleted_at.is_(None),
                            Rule.profile_id == (_id(profile_id) if profile_id else default_profile_id(s)))
     if search:
-        like = f"%{search.strip()}%"
-        q = q.where(or_(Rule.code.ilike(like), Rule.title.ilike(like)))
+        text = search.strip()
+        q = q.where(or_(Rule.code.icontains(text, autoescape=True), Rule.title.icontains(text, autoescape=True)))
     if kind:
         q = q.where(Rule.kind == kind)
     rules = s.scalars(q.order_by(Rule.code)).all()

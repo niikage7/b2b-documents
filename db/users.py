@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
@@ -38,6 +39,11 @@ class UserDisabled(DataError):
 
 def hash_password(password: str) -> str:
     return _hasher.hash(password)
+
+
+@lru_cache(maxsize=1)
+def _dummy_hash() -> str:
+    return _hasher.hash("dummy-password-for-timing")
 
 
 def me(user: User) -> dict:
@@ -74,6 +80,11 @@ def authenticate(s: Session, login: str, password: str) -> User:
                     .with_for_update())
     now = datetime.now(UTC)
     if user is None:
+        # Пароль проверяется и для неизвестного логина: по времени ответа не узнать, есть ли такой логин
+        try:
+            _hasher.verify(_dummy_hash(), password)
+        except VerificationError:
+            pass
         raise AuthError()
     if user.locked_until and user.locked_until > now:
         raise TooManyAttempts(details={"retry_after_seconds": int((user.locked_until - now).total_seconds()) + 1})

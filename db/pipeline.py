@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -117,7 +117,11 @@ def set_stage(s: Session, document_id, stage: str, *, progress: int | None = Non
 
 
 def fail_document(s: Session, document_id, code: str, message: str) -> dict:
-    """Документ упал после всех повторов: статус `error`, причина на русском, пересчёт пакета."""
+    """Документ упал после всех повторов: статус `error`, причина на русском.
+
+    Счётчики пакета хранить не нужно: `batch_summary_counters` считает их по документам при чтении,
+    статус пакета выставляет `finish_batch`.
+    """
     doc = _document(s, document_id)
     doc.status = "error"
     doc.stage = "error"
@@ -130,12 +134,11 @@ def fail_document(s: Session, document_id, code: str, message: str) -> dict:
 
 
 def start_task_run(s: Session, *, batch_id, stage: str, document_id=None) -> TaskRun:
-    attempt = s.scalar(
-        select(TaskRun.attempt).where(TaskRun.batch_id == as_uuid(batch_id),
-                                      TaskRun.document_id == (as_uuid(document_id) if document_id else None),
-                                      TaskRun.stage == stage)
-        .order_by(TaskRun.started_at.desc()).limit(1)
-    ) if document_id else None
+    """Запись журнала этапа; номер попытки считается и для этапов пакета (`unpack_batch`, `finalize_batch`)."""
+    doc_filter = TaskRun.document_id == as_uuid(document_id) if document_id else TaskRun.document_id.is_(None)
+    # max, а не последняя по started_at: в одной транзакции now() у всех строк одинаковый
+    attempt = s.scalar(select(func.max(TaskRun.attempt))
+                       .where(TaskRun.batch_id == as_uuid(batch_id), doc_filter, TaskRun.stage == stage))
     run = TaskRun(batch_id=as_uuid(batch_id), document_id=as_uuid(document_id) if document_id else None,
                   stage=stage, status="running", attempt=(attempt or 0) + 1)
     s.add(run)
