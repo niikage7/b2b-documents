@@ -15,6 +15,7 @@
 | `expected.json` | Ожидаемые находки `{rule, doc, quote}` для `bench.pipeline --expected`: условия, которые нарушают пороги чек-листа `r44_default.json` |
 | `disputed.json` | Спорные условия: находку можно засчитать, но и пропуск не ошибка. Стенд их не читает, они нужны для ручного разбора точности |
 | `search.json` | Пункты, которые правило `semantic_llm` должно прочитать, чтобы решить, есть ли риск (размер обеспечения, пени, сроки, гарантия), — для `bench.embeddings --set package` |
+| `passport.json` | Где в документах стоит значение каждого поля паспорта закупки: поле → варианты `{doc, quote}`, засчитывается любой. Поля, которых в документах нет, не размечены — у мебели нет номера ЕИС. Для `bench.passport` |
 
 `doc` — имя файла без расширения: `contract` — проект контракта, `notice` — извещение, `spec` — описание объекта закупки (ТЗ), `requirements` — требования к содержанию заявки. Обоснование НМЦК (XLS, XLSX) не берётся.
 
@@ -53,5 +54,7 @@ python -m bench.embeddings sergeyzh/BERTA intfloat/multilingual-e5-base --set pa
     --expected bench/packages/0338200009926000090/search.json \
     --doc contract=$P/contract.docx --doc notice=$P/notice.docx --doc spec=$P/spec.docx --doc requirements=$P/requirements.docx
 ```
+
+Поиск для паспорта закупки по трём пакетам, без LLM: `python -m bench.passport`; с заполнением паспорта и сверкой значений — `--llm`.
 
 Анализ одного пакета — около 105 тыс. токенов входа и $0,017–0,021 на `deepseek-v4.1-flash-1017`. Для пакетов с пустым `expected.json` стенд таблицу полноты не печатает: все находки разбираются вручную по `disputed.json`.

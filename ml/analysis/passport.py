@@ -63,8 +63,10 @@ FIELDS: tuple[FieldSpec, ...] = (
               "номер закупки, например 0373100000126000045"),
     FieldSpec("procedure", "Способ закупки", "Способ определения поставщика: электронный аукцион, конкурс, "
               "запрос котировок", "например, «электронный аукцион»"),
-    FieldSpec("customer", "Заказчик", "Наименование заказчика, учреждение, ИНН заказчика",
-              "название заказчика без реквизитов"),
+    # Запросы сроков и заказчика — формулировками типового контракта и печатной формы ЕИС: на
+    # «ИНН заказчика» находились реквизиты счёта, на «экспертизу» — порядок экспертизы, а не срок
+    FieldSpec("customer", "Заказчик", "Размещение осуществляет: Заказчик, наименование заказчика; учреждение, "
+              "именуемое в дальнейшем «Заказчик», в лице", "название заказчика без реквизитов"),
     FieldSpec("nmck", "НМЦК", "Начальная (максимальная) цена контракта, цена контракта составляет рублей",
               "сумма с валютой, например «4 850 000,00 руб.»"),
     FieldSpec("application_security", "Обеспечение заявки", "Размер обеспечения заявки на участие в закупке",
@@ -77,10 +79,10 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("delivery_term", "Срок поставки", "Срок поставки товара, поставка осуществляется в течение дней",
               "срок и от какой даты он считается"),
     FieldSpec("delivery_place", "Место поставки", "Место поставки товара, адрес поставки", "адрес"),
-    FieldSpec("acceptance_term", "Срок приёмки", "Приёмка товара осуществляется в течение, экспертиза",
-              "срок приёмки"),
-    FieldSpec("payment_term", "Срок оплаты", "Оплата поставленного товара производится в течение дней",
-              "срок оплаты и от какой даты"),
+    FieldSpec("acceptance_term", "Срок приёмки", "Заказчик в течение рабочих дней с даты поступления документа "
+              "о приемке подписывает документ о приемке или направляет мотивированный отказ", "срок приёмки"),
+    FieldSpec("payment_term", "Срок оплаты", "Оплата (расчет) за поставленный Товар производится в течение "
+              "рабочих дней с даты подписания Заказчиком документа о приемке", "срок оплаты и от какой даты"),
     FieldSpec("warranty_term", "Гарантийный срок", "Гарантийный срок на товар, гарантия качества месяцев",
               "срок гарантии"),
     FieldSpec("deadline", "Окончание подачи заявок", "Дата и время окончания срока подачи заявок",
@@ -120,23 +122,29 @@ def _render(fields: Sequence[FieldSpec], fragments: list[tuple[int, str, str]]) 
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
-def extract_passport(
+@dataclass
+class PassportFragment:
+    """Фрагмент запроса паспорта: блоки одного документа подряд под одним номером."""
+
+    index: int
+    document_id: str
+    filename: str
+    text: str
+    blocks: list[BlockLike]
+
+
+def select_fragments(
     documents: Sequence[tuple[str, str, Sequence[BlockLike]]],
     *,
     search: ChunkSearch | None = None,
-    llm: LLMClient | None = None,
     embedder: Embedder | None = None,
     fields: Sequence[FieldSpec] = FIELDS,
     budget_tokens: int = FIELD_BUDGET_TOKENS,
-) -> ProcurementPassport:
-    """Паспорт закупки по документам пакета: [(document_id, имя файла, блоки)].
-
-    `search` — фрагменты из таблицы `chunk` (`PgVectorSearch`); без него фрагменты
-    нарезаются и индексируются в памяти. Ошибка LLM не роняет этап: паспорт будет пустым.
-    """
-    passport = ProcurementPassport(fields=[])
+) -> list[PassportFragment]:
+    """Фрагменты документов пакета, которые получит LLM: для каждого поля — найденные гибридным
+    поиском в пределах бюджета. Отдельно от вызова LLM, чтобы стенд мерил поиск бесплатно."""
     if not documents:
-        return passport
+        return []
     store = search
     chunks_by_doc: dict[str, list[Chunk]] = {}
     if store is None:
@@ -169,8 +177,7 @@ def extract_passport(
             select_hit(selected[doc_id], hit)
             used += tokens
 
-    fragments: list[tuple[int, str, str]] = []
-    fragment_blocks: dict[int, tuple[str, list[BlockLike]]] = {}
+    fragments: list[PassportFragment] = []
     for doc_id, filename, blocks in documents:
         run: list[BlockLike] = []
         ordered = sorted(blocks, key=lambda b: b.order)
@@ -178,18 +185,38 @@ def extract_passport(
             if block.id in selected[doc_id]:
                 run.append(block)
             if run and (block.id not in selected[doc_id] or pos == len(ordered) - 1):
-                index = len(fragments) + 1
                 texts = [excerpt(b.text, selected[doc_id][b.id]) for b in run]
                 text = "\n".join(f"{b.number} {t}" if getattr(b, "number", None) else t for b, t in zip(run, texts, strict=True))
-                fragments.append((index, filename, text))
-                fragment_blocks[index] = (doc_id, list(run))
+                fragments.append(PassportFragment(len(fragments) + 1, doc_id, filename, text, list(run)))
                 run = []
+    return fragments
+
+
+def extract_passport(
+    documents: Sequence[tuple[str, str, Sequence[BlockLike]]],
+    *,
+    search: ChunkSearch | None = None,
+    llm: LLMClient | None = None,
+    embedder: Embedder | None = None,
+    fields: Sequence[FieldSpec] = FIELDS,
+    budget_tokens: int = FIELD_BUDGET_TOKENS,
+) -> ProcurementPassport:
+    """Паспорт закупки по документам пакета: [(document_id, имя файла, блоки)].
+
+    `search` — фрагменты из таблицы `chunk` (`PgVectorSearch`); без него фрагменты
+    нарезаются и индексируются в памяти. Ошибка LLM не роняет этап: паспорт будет пустым.
+    """
+    passport = ProcurementPassport(fields=[])
+    fragments = select_fragments(documents, search=search, embedder=embedder, fields=fields,
+                                 budget_tokens=budget_tokens)
     if not fragments:
         return passport
+    fragment_blocks = {f.index: (f.document_id, f.blocks) for f in fragments}
 
     client = llm or default_client()
     try:
-        answer = client.chat(_render(fields, fragments), _PassportAnswer, schema_name="procurement_passport",
+        answer = client.chat(_render(fields, [(f.index, f.filename, f.text) for f in fragments]), _PassportAnswer,
+                             schema_name="procurement_passport",
                              max_tokens=200 + ANSWER_TOKENS_PER_FIELD * len(fields), reasoning="none")
     except LLMError as exc:
         log.warning("passport: LLM недоступна, паспорт не заполнен: %s", exc)
