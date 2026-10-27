@@ -49,12 +49,15 @@ def _fragment_of(prompt: str, quote: str) -> int | None:
 
 class FakeLLM:
     """Отвечает по плану: правило → список (цитата, пояснение). Цитата попадает в ответ,
-    только если она есть в тексте запроса — как у честной модели."""
+    только если она есть в тексте запроса — как у честной модели. `safe` — условия, которые
+    модель проверила и вернула с вердиктом `risk=false`."""
 
     def __init__(self, plan: dict[str, list[tuple[str, str]]] | None = None, *, invent: dict | None = None,
-                 delay: float = 0.0, passport: dict[str, tuple[str, str]] | None = None):
+                 safe: dict[str, list[str]] | None = None, delay: float = 0.0,
+                 passport: dict[str, tuple[str, str]] | None = None):
         self.plan = plan or {}
         self.invent = invent or {}
+        self.safe = safe or {}
         self.passport = passport or {}
         self.delay = delay
         self.requests: list[dict] = []
@@ -84,10 +87,17 @@ class FakeLLM:
             for quote, explanation in self.plan.get(code, []):
                 fragment = _fragment_of(prompt, quote)
                 if fragment is not None:
-                    findings.append({"fragment": fragment, "quote": quote, "explanation": explanation,
+                    findings.append({"fragment": fragment, "quote": quote, "check": "условие нарушает порог",
+                                     "risk": True, "explanation": explanation,
                                      "recommendation": f"Запросить разъяснение по {code}", "confidence": 0.9})
+            for quote in self.safe.get(code, []):
+                fragment = _fragment_of(prompt, quote)
+                if fragment is not None:
+                    findings.append({"fragment": fragment, "quote": quote, "check": "в пределах порога",
+                                     "risk": False, "explanation": "", "recommendation": "", "confidence": 0.8})
             for quote in self.invent.get(code, []):
-                findings.append({"fragment": 1, "quote": quote, "explanation": "выдумано", "confidence": 0.7})
+                findings.append({"fragment": 1, "quote": quote, "check": "", "risk": True, "explanation": "выдумано",
+                                 "confidence": 0.7})
             rules.append({"rule_code": code, "findings": findings})
         return _ok(json.dumps({"rules": rules}, ensure_ascii=False))
 

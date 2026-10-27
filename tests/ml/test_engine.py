@@ -93,6 +93,16 @@ def test_duplicates_are_merged(contract_blocks):
     assert len(result.candidates) == 1 and [d.reason for d in result.dropped] == ["duplicate"]
 
 
+def test_no_risk_verdict_is_dropped(contract_blocks):
+    _, rules = load_default_checklist()
+    r04 = next(r for r in rules if r.code == "R-04")
+    quote = "в течение 3 (трёх) календарных дней с даты заключения Контракта"
+    fake = FakeLLM(safe={"R-04": [quote]})
+    result = analyze_rule_group(contract_blocks, [r04], llm=fake.client(), window_tokens=10_000)
+    assert result.candidates == []
+    assert [(d.reason, d.quote) for d in result.dropped] == [("no_risk", quote)]
+
+
 def test_semantic_rule_without_search_reads_windows(contract_blocks):
     _, rules = load_default_checklist()
     r05 = next(r for r in rules if r.code == "R-05")

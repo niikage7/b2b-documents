@@ -13,6 +13,10 @@
   `critical` или `warning`.
 - Корень ответа LLM — объект `{"rules": [...]}`, а не массив: режим структурированного
   JSON у провайдеров принимает только объект.
+- У каждого ответа есть вердикт `risk`: модель может вернуть условие, которое проверила и
+  в котором риска не нашла (`risk=false`). Такие ответы в находки не идут, движок пишет их
+  в лог с причиной `no_risk`. Без вердикта модель отмечала условия в пределах порога: на
+  открытых пакетах 46 ложных находок из 51 (docs/ml-plan.md).
 """
 
 from __future__ import annotations
@@ -62,6 +66,8 @@ class RuleSpec(BaseModel):
 class LLMFinding(BaseModel):
     fragment: int | None = Field(None, description="Номер фрагмента из запроса, где стоит цитата")
     quote: str = Field(description="Дословная цитата из фрагмента")
+    check: str = Field("", description="Что сказано в условии и с каким порогом правила оно сравнивается")
+    risk: bool = Field(True, description="Вердикт: условие нарушает правило. false — проверено, риска нет")
     explanation: str = Field(description="Почему это риск для поставщика, 1–3 предложения")
     recommendation: str = Field("", description="Что поставщику сделать с этим риском, одно предложение")
     confidence: float = Field(description="Уверенность 0–1; значения вне диапазона обрезаются")
@@ -116,7 +122,7 @@ class DroppedFinding(BaseModel):
 
     rule_code: str
     quote: str
-    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote"]
+    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk"]
     best_score: float | None = None
 
 

@@ -9,7 +9,8 @@
 - `llm` — весь документ окнами около 6000 токенов, один вызов на окно и группу.
 
 Цитата из ответа привязывается к тексту блока; раздел и страницу находке даёт блок, а не
-ответ LLM. Уровень находки — уровень правила.
+ответ LLM. Ответ с вердиктом `risk=false` (условие проверено, риска нет) находкой не
+становится. Уровень находки — уровень правила.
 """
 
 from __future__ import annotations
@@ -226,6 +227,10 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
         for finding in answer.findings:
             if not finding.quote.strip():
                 result.dropped.append(DroppedFinding(rule_code=rule.code, quote="", reason="empty_quote"))
+                continue
+            if not finding.risk:
+                # Модель проверила условие и риска не нашла: в отчёт не идёт, остаётся в логе
+                result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote, reason="no_risk"))
                 continue
             preferred = by_index[finding.fragment].blocks if finding.fragment in by_index else own_blocks
             rest = [b for b in all_blocks if b not in preferred]
