@@ -9,6 +9,8 @@
 - номера в ячейках таблиц (номера строк спецификации) разделов не образуют, ячейка берёт
   раздел, в котором стоит таблица;
 - заголовок без номера («Приложение № 1») начинает новый раздел и сбрасывает номер;
+- заголовок, разбитый на два абзаца («8. Порядок сдачи» и «и приемки Товара»), — один раздел:
+  абзац-заголовок со строчной буквы или скобки сразу после заголовка продолжает его название;
 - `section_title` — ближайший заголовок выше; глубина заголовка — по номеру («4.2» глубже
   «4»), без номера — по уровню из парсера;
 - сноски стоят в конце документа и раздела не получают: ссылкой служит страница.
@@ -57,6 +59,14 @@ def normalize_number(raw: str | None) -> tuple[str | None, str | None, int | Non
     return text.rstrip("."), "other", None
 
 
+def _continues_heading(p: RawParagraph, prev: Block | None) -> bool:
+    """Вторая строка заголовка, набранная отдельным абзацем: «и приемки Товара», «(техническое задание)»."""
+    if prev is None or prev.kind != "heading" or p.number or p.stream != "body" or prev.stream != "body":
+        return False
+    first = p.text.lstrip()[:1]
+    return first == "(" or first.islower()
+
+
 def _kind(p: RawParagraph) -> str:
     if p.table is not None:
         return "table_cell"
@@ -71,9 +81,14 @@ def build_structure(result: ExtractionResult, *, document_id: str | None = None)
     """Сырые абзацы → блоки с разделами (`section_number`, `section_title`, `section_block_id`)."""
     blocks: list[Block] = []
     headings: list[tuple[int, Block]] = []  # стек заголовков: (глубина, блок)
+    titles: dict[str, str] = {}  # полное название раздела по id заголовка, если он из двух абзацев
     current: str | None = None  # номер пункта, к которому относятся блоки без номера
     for p in sorted(result.paragraphs, key=lambda x: x.order):
         kind = _kind(p)
+        prev = blocks[-1] if blocks else None
+        # Продолжение — только сразу за заголовком, который сейчас открывает раздел (или за его продолжением)
+        continues = (kind == "heading" and _continues_heading(p, prev) and bool(headings)
+                     and prev.section_block_id == headings[-1][1].id)
         number, number_kind, depth = normalize_number(p.number)
         in_table = p.table is not None
         block_id = stable_id(document_id, "block", p.order)
@@ -86,7 +101,7 @@ def build_structure(result: ExtractionResult, *, document_id: str | None = None)
         section_number = None
         if p.stream == "footnote":
             pass
-        elif in_table:
+        elif in_table or continues:
             section_number = current
         elif kind == "heading":
             # Заголовок открывает раздел: его номер — номер раздела, без номера — раздел сбрасывается
@@ -121,14 +136,18 @@ def build_structure(result: ExtractionResult, *, document_id: str | None = None)
             low_ocr_quality=p.low_ocr_quality,
             source_map=p.source_map,
         )
-        if kind == "heading" and p.stream == "body":
+        if continues:
+            owner = headings[-1][1]
+            titles[owner.id] = f"{titles.get(owner.id, owner.text)} {p.text.strip()}"
+            owner.section_title = titles[owner.id]
+        elif kind == "heading" and p.stream == "body":
             while headings and headings[-1][0] >= level:
                 headings.pop()
             headings.append((level, block))
         if p.stream != "footnote" and headings:
             owner = headings[-1][1]
             block.section_block_id = owner.id
-            block.section_title = owner.text
+            block.section_title = titles.get(owner.id, owner.text)
         blocks.append(block)
     return blocks
 
@@ -144,7 +163,8 @@ def build_chunks(blocks: Sequence[Block], *, document_id: str | None = None,
                                                                 for bid in chunk.block_ids]
         out.append(ChunkRecord(id=stable_id(document_id, "chunk", i), document_id=document_id,
                                block_ids=list(chunk.block_ids), text=chunk.text,
-                               page_from=min(pages), page_to=max(pages)))
+                               page_from=min(pages), page_to=max(pages),
+                               char_start=chunk.start, char_end=chunk.end))
     return out
 
 

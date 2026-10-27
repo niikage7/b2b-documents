@@ -42,7 +42,8 @@ def render_fragments(fragments: Sequence[Fragment]) -> str:
         where = f"стр. {pages[0]}" if len(pages) == 1 else (f"стр. {pages[0]}–{pages[-1]}" if pages else "")
         for block in fragment.blocks:
             number = getattr(block, "number", None)
-            lines.append(f"{number} {block.text}" if number else block.text)
+            text = fragment.excerpts.get(block.id, block.text)
+            lines.append(f"{number} {text}" if number else text)
         # Фрагменты короткие (около пункта договора): название раздела возвращает модели контекст
         title = next((t for b in fragment.blocks if (t := getattr(b, "section_title", None))), None)
         if title and title != fragment.blocks[0].text:

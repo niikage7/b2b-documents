@@ -13,7 +13,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from contracts.extraction import BBox, RawParagraph, SourceMap, WordBox
-from ml.extract.text import clean_text
+from ml.extract.text import CLAUSE_NUMBER, clean_text
 
 log = logging.getLogger(__name__)
 
@@ -22,18 +22,7 @@ COLUMN_GAP = 2.5
 HEADER_ZONE = 0.10
 """Колонтитул ищется в полосе 10% высоты у верхнего и нижнего края листа."""
 
-_NUMBER = re.compile(
-    r"""^(?:
-        (?:Раздел|РАЗДЕЛ|Статья|СТАТЬЯ|Глава|ГЛАВА|Часть|ЧАСТЬ|Приложение|ПРИЛОЖЕНИЕ)\s+(?:№\s*)?[\dIVXLC]{1,6}\.?
-      | \d{1,3}(?:\.\d{1,3}){0,5}\.(?!\d)
-      | \d{1,3}(?:\.\d{1,3}){1,5}(?![\d.])
-      | \d{1,3}(?:\.\d{1,3}){0,5}\)
-      | \(\d{1,3}\)
-      | [а-яёa-z]\)
-      | [IVXLC]{1,6}\.
-    )(?=\s+\S)""",
-    re.VERBOSE,
-)
+_NUMBER = CLAUSE_NUMBER
 _TERMINAL = re.compile(r"[.!?;:]$")
 _LIST_START = re.compile(r"^(?:\d{1,3}(?:\.\d{1,3})*[.)]|[а-яa-z]\)|[-–—•·▪])\s")
 _DIGITS = re.compile(r"\d+")

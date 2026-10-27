@@ -23,7 +23,15 @@ from pydantic import BaseModel, Field
 
 from contracts.analysis import LLMUsage, PassportField, ProcurementPassport
 from ml.analysis.anchor import anchor_quote
-from ml.analysis.blocks import BlockLike, Chunk, chunk_blocks, estimate_tokens
+from ml.analysis.blocks import (
+    BlockLike,
+    Chunk,
+    Selection,
+    chunk_blocks,
+    estimate_tokens,
+    excerpt,
+    select_hit,
+)
 from ml.analysis.embeddings import Embedder, embed_texts
 from ml.analysis.llm import LLMClient, default_client
 from ml.analysis.search import ChunkSearch, InMemorySearch, LexicalIndex, rank_chunks, take_budget
@@ -139,7 +147,7 @@ def extract_passport(
     vectors = embed_texts([f.query for f in fields], "query", embedder=embedder)
 
     # Фрагменты всех полей одним списком: блоки одного документа подряд объединяются
-    selected: dict[str, set[str]] = {doc_id: set() for doc_id, _, _ in documents}
+    selected: dict[str, Selection] = {doc_id: {} for doc_id, _, _ in documents}
     for spec, vector in zip(fields, vectors, strict=True):
         hits = []
         for doc_id, chunks in chunks_by_doc.items():
@@ -154,7 +162,7 @@ def extract_passport(
             tokens = estimate_tokens(hit.text)
             if used and used + tokens > budget_tokens:
                 break
-            selected[doc_id].update(hit.block_ids)
+            select_hit(selected[doc_id], hit)
             used += tokens
 
     fragments: list[tuple[int, str, str]] = []
@@ -167,7 +175,8 @@ def extract_passport(
                 run.append(block)
             if run and (block.id not in selected[doc_id] or pos == len(ordered) - 1):
                 index = len(fragments) + 1
-                text = "\n".join(f"{b.number} {b.text}" if getattr(b, "number", None) else b.text for b in run)
+                texts = [excerpt(b.text, selected[doc_id][b.id]) for b in run]
+                text = "\n".join(f"{b.number} {t}" if getattr(b, "number", None) else t for b, t in zip(run, texts, strict=True))
                 fragments.append((index, filename, text))
                 fragment_blocks[index] = (doc_id, list(run))
                 run = []

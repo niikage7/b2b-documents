@@ -64,6 +64,28 @@ def test_sections_inherit_number_and_heading():
     assert blocks[8].table_id == 0 and (blocks[8].row, blocks[8].col) == (1, 0)
 
 
+def test_heading_split_into_two_paragraphs_is_one_section():
+    blocks = build_structure(result(
+        para(0, "Порядок сдачи", number="8.", heading=1),
+        para(1, "и приемки Товара", heading=1),
+        para(2, "Приёмка в течение 10 рабочих дней.", number="8.1."),
+        para(3, "Описание объекта закупки", heading=1),
+        para(4, "(техническое задание)", heading=1),
+        para(5, "Поставляется мебель."),
+        para(6, "Приложение № 2", heading=1),
+    ))
+    rows = [(b.section_number, b.section_title) for b in blocks]
+    assert rows == [
+        ("8", "Порядок сдачи и приемки Товара"),
+        ("8", "Порядок сдачи и приемки Товара"),
+        ("8.1", "Порядок сдачи и приемки Товара"),
+        (None, "Описание объекта закупки (техническое задание)"),
+        (None, "Описание объекта закупки (техническое задание)"),
+        (None, "Описание объекта закупки (техническое задание)"),
+        (None, "Приложение № 2"),  # с заглавной буквы — новый раздел
+    ]
+
+
 def test_ids_are_stable_and_chunks_have_pages():
     res = result(para(0, "Цена", number="2.", heading=1), para(1, "Цена составляет 100 рублей.", number="2.1."),
                  para(2, "слово " * 300, number="2.2.", page=2),
@@ -74,7 +96,12 @@ def test_ids_are_stable_and_chunks_have_pages():
     assert [b.id for b in first] == [b.id for b in again]
     assert first[0].id != other[0].id and len(first[0].id) == 36
     chunks = build_chunks(first, document_id="doc-1", max_tokens=60)
-    assert [c.block_ids for c in chunks] == [[first[0].id, first[1].id], [first[2].id]]  # сноска не в поиске
+    # Пункт 2.2 длиннее LONG_BLOCK_TOKENS — окна одного блока; сноска не в поиске
+    assert chunks[0].block_ids == [first[0].id, first[1].id] and chunks[0].char_start is None
+    windows = chunks[1:]
+    assert len(windows) > 1 and all(c.block_ids == [first[2].id] for c in windows)
+    assert windows[0].char_start == 0 and windows[-1].char_end == len(first[2].text.rstrip())
+    assert all(a.char_end <= b.char_start for a, b in zip(windows, windows[1:], strict=False))
     assert (chunks[0].page_from, chunks[0].page_to, chunks[1].page_from) == (1, 1, 2)
     assert chunks[1].text.startswith("Цена\n2.2 ")
     indexed = index_chunks(first, document_id="doc-1", embedder=FakeEmbedder())

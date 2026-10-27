@@ -10,12 +10,12 @@
 | --- | --- | --- | --- |
 | Загрузка файла в черновик | API | `ml.check_file(path)` | `FileCheck`: `check` (`ok`, `unsupported`, `encrypted`, `corrupted`), `kind`, `message` на русском |
 | `extract_text`, DOCX | ingest | `ml.extract_docx(path)` | `ExtractionResult` с сырыми абзацами и картой runs |
-| `extract_text`, DOC и RTF | ingest | `ml.convert_to_docx(path)`, затем `ml.extract_docx(docx, kind="doc")` | То же; экспорт открывает этот же сконвертированный DOCX |
+| `extract_text`, DOC и RTF | ingest | `ml.convert_to_docx(path)`, затем `ml.extract_docx(docx, kind="doc", source_pages=ml.doc_page_count(path))` | То же; экспорт открывает этот же сконвертированный DOCX. `source_pages` — число страниц из свойств DOC: без него страницы оцениваются по объёму текста |
 | `extract_text`, PDF | ingest | `ml.plan_pdf(path)` | Классы страниц (`PageInfo`) и `needs_ocr` у страниц для OCR |
 | `ocr_pages` | ocr | `ml.ocr_pages(path, pages, progress=..., images_dir=...)` | `OcrPage` на страницу: только слова с рамками и уверенностью |
 | После всех групп OCR | ingest | `ml.build_pdf_result(path, plan, ocr)` | `ExtractionResult`: абзацы собираются один раз, иначе абзац на границе групп разорвётся |
 | `build_structure` | ingest | `ml.build_structure(result, document_id=...)` | Блоки (`contracts.document.Block`) с `section_number`, `section_title`, `section_block_id`; `id` детерминированы — повтор этапа даёт те же блоки |
-| `index_chunks` | analysis | `ml.index_chunks(blocks, document_id=...)` | Строки таблицы `chunk` (`ChunkRecord`) с эмбеддингами и `page_from`, `page_to` |
+| `index_chunks` | analysis | `ml.index_chunks(blocks, document_id=...)` | Строки таблицы `chunk` (`ChunkRecord`) с эмбеддингами и `page_from`, `page_to`; у окна длинного блока — `char_start`, `char_end` |
 | Сохранение правила | API | `ml.validate_rule(rule)`, `ml.embed_rule_query(rule)` | Ошибки для 422 и `rule_version.query_embedding` |
 | `extract_batch_meta` | analysis | `ml.extract_batch_meta([(filename, blocks), ...])` | Предмет закупки или `None` |
 | `extract_passport` | analysis, параллельно с анализом | `ml.extract_passport([(document_id, filename, blocks), ...], search=PgVectorSearch(conn))` | `ProcurementPassport`: НМЦК, обеспечения, сроки поставки, приёмки и оплаты, гарантия, место поставки, дата окончания подачи заявок — у каждого значения цитата и место в документе. Пишется `db.pipeline.set_batch_passport` в `batch.meta` |
@@ -73,7 +73,7 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 
 - Таблицы на сканах не восстанавливаются: ячейки идут обычными абзацами, одиночные цифры в узких ячейках могут теряться.
 - Смешанная страница распознаётся целиком; слова OCR поверх слов текстового слоя отбрасываются.
-- Страницы DOCX без меток Word оцениваются по объёму текста (`page_estimated`); число страниц подгоняется под `docProps/app.xml`.
+- Страницы DOCX без меток Word оцениваются по объёму текста (`page_estimated`). Число страниц подгоняется под `docProps/app.xml` (у DOC — под свойства исходного файла), как и страницы по меткам Word, если меток заметно меньше или больше, чем страниц.
 - Колонтитулы DOCX не читаются; сноски идут отдельными абзацами в конце.
 
 ## Что согласовать

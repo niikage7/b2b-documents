@@ -32,7 +32,7 @@ from ml.errors import CorruptedFileError
 from ml.extract.docx_styles import Styles
 from ml.extract.numbering import Numbering
 from ml.extract.ooxml import MC, W, int_attr, local, on_off, wattr
-from ml.extract.text import clean_text, strip_spans
+from ml.extract.text import clean_text, drop_prefix, split_clause_number, strip_spans
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,10 @@ MAX_PART_BYTES = 300 * 1024 * 1024
 CHARS_PER_PAGE = 1800
 """Оценка числа знаков на странице для DOCX без меток страниц (14 кегль, поля ГОСТ)."""
 PARAGRAPH_OVERHEAD = 40
+LABEL_MAX_CHARS = 200
+"""Подпись поля в таблице «подпись — значение» — не длиннее одного-двух предложений."""
+CELL_PAGE_CHARS = 500
+"""Меньше этого текста ячейка на страницу не уходит: более близкая метка в той же ячейке — повтор."""
 
 
 @dataclass
@@ -92,6 +96,33 @@ class _Para:
 
 
 @dataclass
+class _RowPages:
+    """Строка таблицы при чтении страниц по меткам `lastRenderedPageBreak`.
+
+    Word ставит метку в каждой ячейке строки, которая переходит на следующую страницу, иногда
+    две в одной ячейке и ещё одну в начале следующей строки. Переход один: ячейки строки
+    начинают со страницы строки, строка кончается на самой дальней из них.
+    """
+
+    start_chars: int
+    after_break: bool
+    """Предыдущая строка перешла на новую страницу: метка до первого текста этой строки — её повтор."""
+    break_at: int | None = None
+
+
+@dataclass
+class _Cell:
+    """Ячейка строки таблицы после чтения, до вывода блоков."""
+
+    col: int
+    span: int
+    vmerge: etree._Element | None
+    paras: list[_Para]
+    nested: list[etree._Element]
+    page: int
+
+
+@dataclass
 class _Ctx:
     """Состояние чтения одного абзаца."""
 
@@ -112,7 +143,7 @@ class _Ctx:
 
 
 class DocxReader:
-    def __init__(self, path: str | Path, kind: DocumentKind = "docx"):
+    def __init__(self, path: str | Path, kind: DocumentKind = "docx", source_pages: int | None = None):
         self.path = Path(path)
         self.kind = kind
         try:
@@ -130,12 +161,15 @@ class DocxReader:
         self.styles = Styles.parse(self._xml(rels.get(_STYLES)))
         self.numbering = Numbering(self._xml(rels.get(_NUMBERING)), self.styles)
         self.footnotes = self._xml(rels.get(_FOOTNOTES))
-        self.app_pages = self._app_pages()
+        # Число страниц, которое показал Word: из `docProps/app.xml`, у сконвертированного DOC — из его свойств
+        self.app_pages = self._app_pages() or source_pages
 
         self.items: list[RawParagraph] = []
         self.page = 1
         self.use_rendered = self.body.find(f".//{W.lastRenderedPageBreak}") is not None
         self.chars_since_break = 0
+        self.text_chars = 0
+        self.row: _RowPages | None = None
         self.table_counter = 0
         self.footnote_pages: dict[str, int] = {}
         self.para_index = {
@@ -213,8 +247,16 @@ class DocxReader:
         self.chars_since_break = 0
 
     def _rendered_break(self) -> None:
-        if self.use_rendered and self.fixed_page is None:
-            self.page += 1
+        if not self.use_rendered or self.fixed_page is not None:
+            return
+        row = self.row
+        if row is not None:
+            if row.after_break and self.text_chars == row.start_chars:
+                return
+            if row.break_at is not None and self.text_chars - row.break_at < CELL_PAGE_CHARS:
+                return
+            row.break_at = self.text_chars
+        self.page += 1
 
     # --- обход --------------------------------------------------------------------------
 
@@ -224,7 +266,7 @@ class DocxReader:
         if self.footnotes is not None:
             self._read_footnotes()
         pages_estimated = not self.use_rendered
-        if pages_estimated:
+        if pages_estimated or self._marks_incomplete(body_pages):
             pages = self._calibrate_pages(body_pages)
         else:
             pages = max(body_pages, 1)
@@ -249,6 +291,11 @@ class DocxReader:
         width = int_attr(size, "w") if size is not None else None
         height = int_attr(size, "h") if size is not None else None
         return (width / 20 if width else 595.3, height / 20 if height else 841.9)
+
+    def _marks_incomplete(self, counted: int) -> bool:
+        """Меток Word заметно меньше или больше, чем страниц в `app.xml`: Word пишет их не везде."""
+        target = self.app_pages
+        return bool(target) and abs(target - counted) > max(1, target // 10)
 
     def _calibrate_pages(self, estimated_total: int) -> int:
         """Подгоняет оценку страниц под `docProps/app.xml`, если Word записал число страниц."""
@@ -306,11 +353,19 @@ class DocxReader:
         heading_level, heading_source = para.heading_level, para.heading_source
         if heading_level is None and table is None and stream == "body":
             heading_level, heading_source = _heading_heuristic(para)
+        text, spans, number = para.text, para.spans, para.number
+        number_source = "numbering" if number else None
+        if number is None and table is None and stream == "body":
+            # Номер набран вручную («6.4. За каждый факт…»): выделяется по тому же шаблону, что в PDF
+            found = split_clause_number(text)
+            if found is not None:
+                number, number_source = found[0], "pattern"
+                text, spans = drop_prefix(text, spans, found[1])
         item = RawParagraph(
             order=len(self.items),
-            text=para.text,
-            number=para.number,
-            number_source="numbering" if para.number else None,
+            text=text,
+            number=number,
+            number_source=number_source,
             list_level=para.list_level,
             is_bullet=para.is_bullet,
             heading_level=heading_level,
@@ -327,7 +382,7 @@ class DocxReader:
             page=para.page,
             page_end=para.page_end if para.page_end > para.page else None,
             page_estimated=not self.use_rendered,
-            source_map=SourceMap(format="docx", part=self.part, runs=para.spans),
+            source_map=SourceMap(format="docx", part=self.part, runs=spans),
         )
         self.items.append(item)
         return item
@@ -339,39 +394,64 @@ class DocxReader:
         self.table_counter += 1
         is_layout = self._is_layout_table(tbl)
         open_merges: dict[int, RawParagraph] = {}
+        outer = self.row
+        after_break = False
+        rendered = self.use_rendered and self.fixed_page is None
         for row_idx, tr in enumerate(_iter_rows(tbl)):
             trpr = tr.find(W.trPr)
             col = (int_attr(trpr.find(W.gridBefore)) or 0) if trpr is not None else 0
+            row_page = row_end = self.page
+            row = _RowPages(start_chars=self.text_chars, after_break=after_break)
+            cells: list[_Cell] = []
             for tc in _iter_cells(tr):
+                self.row = row
+                row.break_at = None
+                if rendered:
+                    self.page = row_page
                 tcpr = tc.find(W.tcPr)
                 span = (int_attr(tcpr.find(W.gridSpan)) if tcpr is not None else None) or 1
                 vmerge = tcpr.find(W.vMerge) if tcpr is not None else None
-                continues = vmerge is not None and wattr(vmerge) in (None, "continue")
                 paras, nested = self._read_cell(tc)
-                text_paras = [p for p in paras if p.text]
-                if continues and col in open_merges and not text_paras:
-                    open_merges[col].table.row_span += 1
-                elif text_paras:
-                    ref = TableCellRef(
-                        table_id=table_id,
-                        row=row_idx,
-                        col=col,
-                        col_span=span,
-                        is_layout=is_layout,
-                        parent_table_id=parent_table,
-                    )
-                    item = self._emit(_merge_cell(text_paras), stream, ref)
-                    if vmerge is not None:
-                        open_merges[col] = item
-                    else:
-                        open_merges.pop(col, None)
-                    for para in text_paras:
-                        self._emit_children(para)
-                else:
-                    open_merges.pop(col, None)
-                for inner in nested:
-                    self.walk_table(inner, stream, table_id)
+                cells.append(_Cell(col, span, vmerge, [p for p in paras if p.text], nested, self.page))
                 col += span
+            pair = _label_value(cells)
+            for cell in cells:
+                self.page = cell.page if rendered else self.page
+                ref = TableCellRef(
+                    table_id=table_id,
+                    row=row_idx,
+                    col=cell.col,
+                    col_span=cell.span,
+                    is_layout=is_layout,
+                    parent_table_id=parent_table,
+                )
+                continues = cell.vmerge is not None and wattr(cell.vmerge) in (None, "continue")
+                if pair is not None and cell is pair[1]:
+                    pass
+                elif pair is not None and cell is pair[0]:
+                    # Подпись и значение в соседних ячейках — один блок: цитата и поиск видят значение с подписью
+                    ref.col_span = pair[1].col + pair[1].span - cell.col
+                    self._emit(_merge_label_value(cell.paras[0], _merge_cell(pair[1].paras)), stream, ref)
+                    open_merges.pop(cell.col, None)
+                elif continues and cell.col in open_merges and not cell.paras:
+                    open_merges[cell.col].table.row_span += 1
+                elif cell.paras:
+                    item = self._emit(_merge_cell(cell.paras), stream, ref)
+                    if cell.vmerge is not None:
+                        open_merges[cell.col] = item
+                    else:
+                        open_merges.pop(cell.col, None)
+                else:
+                    open_merges.pop(cell.col, None)
+                for para in cell.paras:
+                    self._emit_children(para)
+                for inner in cell.nested:
+                    self.walk_table(inner, stream, table_id)
+                row_end = max(row_end, self.page)
+            if rendered:
+                self.page = row_end
+            after_break = row_end > row_page
+        self.row = outer
 
     def _read_cell(self, tc: etree._Element) -> tuple[list[_Para], list[etree._Element]]:
         paras: list[_Para] = []
@@ -581,6 +661,7 @@ class DocxReader:
             if ctx.start_page is None and s.strip():
                 ctx.start_page = self.current_page
             start = ctx.pos
+            self.text_chars += len(s)
             ctx.pieces.append(s)
             ctx.pos += len(s)
             visible = len(s) - sum(1 for c in s if c.isspace())
@@ -768,12 +849,68 @@ def _merge_cell(paras: list[_Para]) -> _Para:
     )
 
 
+def _label_value(cells: list[_Cell]) -> tuple[_Cell, _Cell] | None:
+    """Строка «подпись — значение»: «Размер обеспечения заявки | 7789.41 РОССИЙСКИЙ РУБЛЬ», «Количество | 200».
+
+    Две ячейки с текстом, подпись — один короткий абзац. Не пара: обе ячейки жирные (шапка
+    таблицы, «Заказчик | Поставщик»), обе кончаются двоеточием («От имени Заказчика:») или
+    в них бланк подписи «____».
+    """
+    filled = [c for c in cells if c.paras]
+    if len(filled) != 2 or any(c.vmerge is not None or c.nested for c in cells):
+        # Объединённая по вертикали ячейка рядом — это строка многоколоночной таблицы, а не пара
+        return None
+    label, value = filled
+    head = label.paras[0]
+    if len(label.paras) != 1 or len(head.text) > LABEL_MAX_CHARS or "\n" in head.text:
+        return None
+    if not any(ch.isalpha() for ch in head.text):
+        return None
+    texts = [head.text] + [p.text for p in value.paras]
+    if any("___" in text for text in texts):
+        return None
+    if head.bold and all(p.bold for p in value.paras):
+        return None
+    if head.text.rstrip().endswith(":") and value.paras[-1].text.rstrip().endswith(":"):
+        return None
+    return label, value
+
+
+def _merge_label_value(label: _Para, value: _Para) -> _Para:
+    """Подпись и значение — в один абзац «подпись: значение»; отрезки runs значения сдвигаются."""
+    sep = " " if label.text.rstrip().endswith((":", "-", "—")) else ": "
+    shift = len(label.text) + len(sep)
+    spans = list(label.spans) + [s.model_copy(update={"start": s.start + shift, "end": s.end + shift}) for s in value.spans]
+    return _Para(
+        text=label.text + sep + value.text,
+        spans=spans,
+        number=label.number,
+        list_level=label.list_level,
+        is_bullet=label.is_bullet,
+        heading_level=None,
+        heading_source=None,
+        style_id=label.style_id,
+        style_name=label.style_name,
+        bold=label.bold and value.bold,
+        all_caps=label.all_caps and value.all_caps,
+        align=label.align,
+        indent=label.indent,
+        font_size=label.font_size,
+        page=label.page,
+        page_end=max(label.page_end, value.page_end),
+        textboxes=[],
+        formulas=[],
+    )
+
+
 def _heading_heuristic(para: _Para) -> tuple[int | None, str | None]:
     """Запасное правило: короткий абзац до 120 знаков, целиком жирный или прописными."""
     text = para.text
     if not text or len(text) > 120 or "\n" in text or _TERMINAL.search(text):
         return None, None
-    if not any(c.isalpha() for c in text):
+    letters = sum(c.isalpha() for c in text)
+    if not letters or sum(c.isdigit() for c in text) > letters:
+        # Реквизиты и коды («ИНН 7726429427 КПП 772601001», «ОКПД 2: 26.20.15.160») — не заголовки
         return None, None
     if para.bold or para.all_caps:
         level = (para.list_level + 1) if para.list_level is not None else 1
@@ -781,9 +918,13 @@ def _heading_heuristic(para: _Para) -> tuple[int | None, str | None]:
     return None, None
 
 
-def extract_docx(path: str | Path, kind: DocumentKind = "docx") -> ExtractionResult:
-    """Сырые абзацы DOCX. Для DOC и RTF сюда передаётся сконвертированный файл и исходный `kind`."""
-    reader = DocxReader(path, kind)
+def extract_docx(path: str | Path, kind: DocumentKind = "docx", source_pages: int | None = None) -> ExtractionResult:
+    """Сырые абзацы DOCX. Для DOC и RTF сюда передаётся сконвертированный файл и исходный `kind`.
+
+    `source_pages` — число страниц исходного файла (`doc_page_count` для DOC): LibreOffice не
+    пишет в DOCX ни меток страниц, ни их числа, и без него страницы оцениваются по объёму текста.
+    """
+    reader = DocxReader(path, kind, source_pages)
     try:
         return reader.read()
     finally:

@@ -16,7 +16,7 @@ def extract_document(path: str | Path) -> ExtractionResult:
     from ml.convert import convert_to_docx
     from ml.extract.docx_reader import extract_docx
     from ml.extract.pdf_extract import extract_pdf
-    from ml.files import require_ok
+    from ml.files import doc_page_count, require_ok
 
     check = require_ok(path)
     if check.kind == "pdf":
@@ -24,7 +24,8 @@ def extract_document(path: str | Path) -> ExtractionResult:
     if check.kind == "docx":
         return extract_docx(path)
     if check.kind in ("doc", "rtf"):
-        return extract_docx(convert_to_docx(path), kind=check.kind)
+        pages = doc_page_count(path) if check.kind == "doc" else None
+        return extract_docx(convert_to_docx(path), kind=check.kind, source_pages=pages)
     from ml.errors import UnsupportedFormatError
 
     raise UnsupportedFormatError()

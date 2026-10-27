@@ -13,7 +13,7 @@
 с тем же бюджетом и гибридом — 0,98 (замер 27.10, docs/ml-plan.md).
 
 `PgVectorSearch` читает таблицу `chunk` из «Требований к бэкенду» (`id`, `document_id`,
-`block_ids`, `text`, `embedding`).
+`block_ids`, `text`, `embedding`) и окно длинного блока (`char_start`, `char_end`).
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ class InMemorySearch:
         return self.store.get(document_id, [])
 
 
-_SQL = "SELECT id::text, block_ids::text[], text, embedding::text FROM {table} WHERE document_id = %(document_id)s"
+_SQL = ("SELECT id::text, block_ids::text[], text, embedding::text, char_start, char_end FROM {table} "
+        "WHERE document_id = %(document_id)s")
 
 
 class PgVectorSearch:
@@ -85,7 +86,8 @@ class PgVectorSearch:
         finally:
             if own:
                 conn.close()
-        return [Chunk(id=str(r[0]), block_ids=[str(b) for b in r[1]], text=r[2], embedding=_parse_vector(r[3]))
+        return [Chunk(id=str(r[0]), block_ids=[str(b) for b in r[1]], text=r[2], embedding=_parse_vector(r[3]),
+                      start=r[4], end=r[5])
                 for r in rows]
 
 
@@ -201,7 +203,8 @@ def rank_chunks(
         scores = dense
     else:
         scores = lex or [0.0] * len(chunks)
-    return [ChunkHit(chunks[i].id, list(chunks[i].block_ids), round(scores[i], 6), chunks[i].text)
+    return [ChunkHit(chunks[i].id, list(chunks[i].block_ids), round(scores[i], 6), chunks[i].text,
+                     chunks[i].start, chunks[i].end)
             for i in _order(scores)]
 
 

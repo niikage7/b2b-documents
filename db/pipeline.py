@@ -230,7 +230,8 @@ def save_chunks(s: Session, document_id, chunks: Sequence[ChunkRecord]) -> int:
     doc_id = as_uuid(document_id)
     s.execute(delete(ChunkRow).where(ChunkRow.document_id == doc_id))
     rows = [{"id": as_uuid(c.id), "document_id": doc_id, "block_ids": [as_uuid(b) for b in c.block_ids],
-             "text": c.text, "embedding": c.embedding, "page_from": c.page_from, "page_to": c.page_to}
+             "text": c.text, "embedding": c.embedding, "page_from": c.page_from, "page_to": c.page_to,
+             "char_start": c.char_start, "char_end": c.char_end}
             for c in chunks if c.embedding is not None]
     for start in range(0, len(rows), 500):
         s.execute(insert(ChunkRow).values(rows[start:start + 500]))

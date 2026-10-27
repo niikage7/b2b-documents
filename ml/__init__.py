@@ -12,6 +12,7 @@ import importlib
 
 _EXPORTS = {
     "check_file": "ml.files",
+    "doc_page_count": "ml.files",
     "convert_to_docx": "ml.convert",
     "extract_document": "ml.extract",
     "extract_docx": "ml.extract.docx_reader",

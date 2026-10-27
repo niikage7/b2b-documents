@@ -9,7 +9,14 @@ import pytest
 from bench.pipeline import _modes, _totals
 from contracts.analysis import FindingCandidate, LLMGroupResponse, LLMUsage, RuleSpec, RuleVariable
 from ml.analysis.anchor import anchor_quote, prepare_quote
-from ml.analysis.blocks import Chunk, SimpleBlock, blocks_from_text, chunk_blocks, estimate_tokens
+from ml.analysis.blocks import (
+    Chunk,
+    SimpleBlock,
+    blocks_from_text,
+    chunk_blocks,
+    estimate_tokens,
+    excerpt,
+)
 from ml.analysis.cache import DirCache
 from ml.analysis.llm import reasoning_effort
 from ml.analysis.search import LexicalIndex, PgVectorSearch, lexical_terms, rank_chunks, take_budget
@@ -127,7 +134,7 @@ def test_blocks_from_text_and_chunks():
     blocks = blocks_from_text("1. Общие положения\n1.1. Текст пункта.\n\nАбзац без номера.\nа) подпункт")
     assert [(b.number, b.text) for b in blocks] == [
         ("1.", "Общие положения"), ("1.1.", "Текст пункта."), (None, "Абзац без номера."), ("а)", "подпункт")]
-    long = [SimpleBlock(f"b{i}", i, "слово " * 200) for i in range(5)]
+    long = [SimpleBlock(f"b{i}", i, "слово " * 150) for i in range(5)]
     chunks = chunk_blocks(long, max_tokens=400, overlap=1)
     assert all(len(c.block_ids) <= 2 for c in chunks)
     assert chunks[1].block_ids[0] == chunks[0].block_ids[-1]  # перекрытие в один блок
@@ -135,11 +142,25 @@ def test_blocks_from_text_and_chunks():
     short = [SimpleBlock("h", 0, "Ответственность сторон", number="7.", section_title="Ответственность сторон"),
              SimpleBlock("p1", 1, "Пеня начисляется за каждый день просрочки.", number="7.1.",
                          section_title="Ответственность сторон"),
-             SimpleBlock("p2", 2, "слово " * 200, number="7.2.", section_title="Ответственность сторон")]
+             SimpleBlock("p2", 2, "слово " * 60, number="7.2.", section_title="Ответственность сторон")]
     chunks = chunk_blocks(short, max_tokens=80, overlap=0)
     assert [c.block_ids for c in chunks] == [["h", "p1"], ["p2"]]
     # Название раздела в начале фрагмента, если фрагмент начинается не с заголовка
     assert chunks[0].text.startswith("7. Ответственность") and chunks[1].text.startswith("Ответственность сторон\n7.2.")
+
+
+def test_long_block_is_split_into_sentence_windows():
+    text = "".join(f"Требование номер {i} к содержанию заявки участника закупки. " for i in range(60))
+    cell = SimpleBlock("cell", 0, text.strip())
+    chunks = chunk_blocks([SimpleBlock("a", 1, "Короткий пункт."), cell, SimpleBlock("b", 2, "Ещё пункт.")],
+                          max_tokens=60)
+    windows = [c for c in chunks if c.block_ids == ["cell"]]
+    assert [c.block_ids for c in chunks if c.start is None] == [["a"], ["b"]]  # окна не склеиваются с соседями
+    assert len(windows) > 5 and all(estimate_tokens(c.text) <= 60 for c in windows)
+    assert all(c.text == cell.text[c.start : c.end] and c.text.endswith(".") for c in windows)  # по предложениям
+    assert excerpt(cell.text, [(windows[3].start, windows[3].end), (windows[0].start, windows[0].end)]) == (
+        f"{windows[0].text} … {windows[3].text} …")
+    assert excerpt(cell.text, None) == cell.text
 
 
 def test_lexical_index_and_hybrid_rank():
@@ -186,7 +207,7 @@ def test_pgvector_search_sql():
             self.executed = (sql, params)
 
         def fetchall(self):
-            return [("c1", ["b1", "b2"], "текст", "[0.1,0.2]"), ("c2", ["b3"], "без вектора", None)]
+            return [("c1", ["b1", "b2"], "текст", "[0.1,0.2]", None, None), ("c2", ["b3"], "без вектора", None, 5, 40)]
 
     cursor = Cursor()
 
@@ -198,9 +219,9 @@ def test_pgvector_search_sql():
     sql, params = cursor.executed
     assert "WHERE document_id = %(document_id)s" in sql and params == {"document_id": "doc-1"}
     assert chunks[0].block_ids == ["b1", "b2"] and chunks[0].embedding == [0.1, 0.2]
-    assert chunks[1].embedding is None
+    assert chunks[1].embedding is None and (chunks[1].start, chunks[1].end) == (5, 40)
     hits = rank_chunks(chunks, [0.1, 0.2], "текст")
-    assert hits[0].chunk_id == "c1"
+    assert hits[0].chunk_id == "c1" and (hits[1].start, hits[1].end) == (5, 40)
     with pytest.raises(ValueError):
         PgVectorSearch(Conn(), table="chunk; drop table x")
 

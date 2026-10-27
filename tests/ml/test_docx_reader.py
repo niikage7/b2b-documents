@@ -223,6 +223,63 @@ def test_tables_merges_and_layout(tmp_path):
     ]
 
 
+def test_label_value_row_is_one_block(tmp_path):
+    def tc(text, rpr=""):
+        return f"<w:tc>{p(runs=r(text, rpr))}</w:tc>"
+
+    bold = "<w:b/>"
+    table = (
+        "<w:tbl>"
+        f"<w:tr>{tc('Заказчик', bold)}{tc('Поставщик', bold)}</w:tr>"
+        f"<w:tr>{tc('Размер обеспечения заявки')}{tc('7789.41 РОССИЙСКИЙ РУБЛЬ')}<w:tc>{p()}</w:tc></w:tr>"
+        f"<w:tr>{tc('Цена:')}{tc('1 000 руб.')}</w:tr>"
+        f"<w:tr>{tc('От имени Заказчика:')}{tc('От имени Поставщика:')}</w:tr>"
+        f"<w:tr>{tc('Подпись')}{tc('________ / Иванов /')}</w:tr>"
+        "</w:tbl>"
+    )
+    path = make_docx(tmp_path / "lv.docx", table)
+    result = extract_docx(path)
+    assert [(i.text, i.table.row, i.table.col_span) for i in result.paragraphs] == [
+        ("Заказчик", 0, 1),
+        ("Поставщик", 0, 1),
+        ("Размер обеспечения заявки: 7789.41 РОССИЙСКИЙ РУБЛЬ", 1, 2),
+        ("Цена: 1 000 руб.", 2, 2),
+        ("От имени Заказчика:", 3, 1),
+        ("От имени Поставщика:", 3, 1),
+        ("Подпись", 4, 1),
+        ("________ / Иванов /", 4, 1),
+    ]
+    # Отрезки runs указывают на подпись и на значение в своих ячейках
+    item = result.paragraphs[2]
+    paragraphs = list(docx.Document(str(path)).element.body.iter(qn("w:p")))
+    for span in item.source_map.runs:
+        run = list(paragraphs[span.paragraph_index].iter(qn("w:r")))[span.run_index]
+        run_text = docx.text.run.Run(run, None).text
+        assert item.text[span.start : span.end] == run_text[span.run_offset : span.run_offset + span.end - span.start]
+    assert sum(s.end - s.start for s in item.source_map.runs) == len(item.text) - 2  # кроме «: »
+
+
+def test_typed_clause_numbers(tmp_path):
+    body = (
+        p("Ответственность Сторон", ppr="")
+        + p(runs=r("6.4. ") + r("За каждый факт неисполнения"))
+        + p("а) по заявке Заказчика;")
+        + p("1.5 млн руб.")
+        + "<w:tbl><w:tr><w:tc>" + p("1. Стол") + "</w:tc></w:tr></w:tbl>"
+    )
+    path = make_docx(tmp_path / "num.docx", body)
+    result = extract_docx(path)
+    assert [(i.number, i.number_source, i.text) for i in result.paragraphs] == [
+        (None, None, "Ответственность Сторон"),
+        ("6.4.", "pattern", "За каждый факт неисполнения"),
+        ("а)", "pattern", "по заявке Заказчика;"),
+        ("1.5", "pattern", "млн руб."),  # тот же шаблон, что в PDF: десятичное число в начале абзаца — номер
+        (None, None, "1. Стол"),  # в ячейках таблиц номер не выделяется
+    ]
+    (span,) = result.paragraphs[1].source_map.runs
+    assert (span.start, span.end, span.run_index, span.run_offset) == (0, 27, 1, 0)
+
+
 def test_cell_with_several_paragraphs(tmp_path):
     cell = f"<w:tc>{p('Первый абзац')}{p('Второй', ppr=numpr(1))}</w:tc>"
     xml = numbering({0: lvl(0, "decimal", "%1.")}, {1: 0})
@@ -259,6 +316,42 @@ def test_pages_from_rendered_breaks(tmp_path):
     result = extract_docx(make_docx(tmp_path / "m.docx", body))
     assert [(i.page, i.page_end) for i in result.paragraphs] == [(1, None), (2, None), (2, 3)]
     assert result.pages == 3 and not result.pages_estimated
+
+
+def test_table_row_across_pages_counts_once(tmp_path):
+    mark = "<w:lastRenderedPageBreak/>"
+
+    def cell(*runs):
+        return "<w:tc>" + p(runs="".join(runs)) + "</w:tc>"
+
+    long_text = "описание " * 80
+    table = (
+        "<w:tbl>"
+        f"<w:tr>{cell(r('1'))}{cell(r('Стол'))}{cell(r(long_text))}</w:tr>"
+        # Строка переходит на страницу 2: метка в каждой ячейке и две в одной ячейке
+        f"<w:tr>{cell(r('2'))}{cell(r('Шкаф'), f'<w:r>{mark}<w:t>для документов</w:t></w:r>')}"
+        f"{cell(f'<w:r>{mark}</w:r>', r('Корпус'), f'<w:r>{mark}<w:t>ЛДСП</w:t></w:r>')}</w:tr>"
+        # Повтор метки в начале следующей строки
+        f"<w:tr>{cell(f'<w:r>{mark}<w:t>3</w:t></w:r>')}{cell(r('Тумба'))}{cell(r('ЛДСП'))}</w:tr>"
+        "</w:tbl>"
+    )
+    result = extract_docx(make_docx(tmp_path / "rows.docx", p("До таблицы") + table + p("После таблицы")))
+    pages = [(i.text[:12], i.page, i.page_end) for i in result.paragraphs]
+    assert pages == [
+        ("До таблицы", 1, None), ("1", 1, None), ("Стол", 1, None), (long_text[:12], 1, None),
+        ("2", 1, None), ("Шкафдля доку", 1, 2), ("КорпусЛДСП", 2, None),  # вторая метка в ячейке — повтор
+        ("3", 2, None), ("Тумба", 2, None), ("ЛДСП", 2, None),
+        ("После таблиц", 2, None),
+    ]
+    assert result.pages == 2
+
+
+def test_pages_calibrated_to_source_page_count(tmp_path):
+    body = "".join(p("Пункт договора " * 40) for _ in range(30))
+    path = make_docx(tmp_path / "doc.docx", body)
+    assert extract_docx(path).pages > 5
+    result = extract_docx(path, kind="doc", source_pages=3)
+    assert result.pages == 3 and max(i.page for i in result.paragraphs) == 3
 
 
 def test_pages_estimated_with_explicit_break(tmp_path):

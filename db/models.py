@@ -226,6 +226,9 @@ class ChunkRow(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     page_from: Mapped[int] = mapped_column(Integer, nullable=False)
     page_to: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Окно длинного блока (ячейка таблицы на тысячи токенов): смещения в тексте единственного блока
+    char_start: Mapped[int | None] = mapped_column(Integer)
+    char_end: Mapped[int | None] = mapped_column(Integer)
 
 
 # --- Правила ------------------------------------------------------------------------------

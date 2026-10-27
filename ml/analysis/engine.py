@@ -30,7 +30,7 @@ from contracts.analysis import (
     RuleSpec,
 )
 from ml.analysis.anchor import anchor_quote
-from ml.analysis.blocks import BlockLike, Fragment, estimate_tokens
+from ml.analysis.blocks import BlockLike, Fragment, Selection, estimate_tokens, excerpt, select_hit
 from ml.analysis.embeddings import Embedder, embed_texts
 from ml.analysis.llm import LLMClient, default_client
 from ml.analysis.prompts import group_prompt
@@ -99,15 +99,21 @@ def _semantic_call(
         strict=True,
     ))
     per_rule: dict[str, set[str]] = {}
+    windows: Selection = {}
     for rule in rules:
         vector = rule.query_embedding or vectors[rule.code]
         hits = take_budget(rank_chunks(chunks, vector, rule_search_text(rule), lexical=lexical), budget_tokens)
         per_rule[rule.code] = {bid for hit in hits for bid in hit.block_ids if bid in known}
+        for hit in hits:
+            select_hit(windows, hit)
         log.debug("analysis: %s: фрагментов %d из %d", rule.code, len(hits), len(chunks))
     selected = set().union(*per_rule.values()) if per_rule else set()
     if not selected:
         return None
     fragments = _fragments_from_blocks(ordered, selected)
+    for fragment in fragments:
+        # От длинного блока в запрос идут только найденные окна; цитата привязывается к блоку целиком
+        fragment.excerpts = {b.id: excerpt(b.text, windows[b.id]) for b in fragment.blocks if windows.get(b.id)}
     by_block = {b.id: f.index for f in fragments for b in f.blocks}
     rule_fragments = {code: sorted({by_block[bid] for bid in ids}) for code, ids in per_rule.items()}
     return _Call(rules, fragments, rule_fragments)

@@ -130,6 +130,22 @@ def _check_zip(path: Path) -> FileCheck:
         raise CorruptedFileError(detail=f"zip: {exc}") from exc
 
 
+def doc_page_count(path: str | Path) -> int | None:
+    """Число страниц DOC из свойств документа Word (SummaryInformation), если Word его записал."""
+    try:
+        ole = olefile.OleFileIO(str(path))
+    except OSError:
+        return None
+    try:
+        pages = ole.get_metadata().num_pages
+    except Exception:  # noqa: BLE001 — повреждённые свойства не мешают разбору текста
+        log.debug("doc: свойства документа не прочитаны: %s", path)
+        return None
+    finally:
+        ole.close()
+    return pages if isinstance(pages, int) and pages > 0 else None
+
+
 def _check_ole(path: Path) -> FileCheck:
     try:
         ole = olefile.OleFileIO(str(path))

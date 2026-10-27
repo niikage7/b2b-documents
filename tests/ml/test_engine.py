@@ -103,6 +103,23 @@ def test_no_risk_verdict_is_dropped(contract_blocks):
     assert [(d.reason, d.quote) for d in result.dropped] == [("no_risk", quote)]
 
 
+def test_long_block_goes_to_llm_as_found_windows():
+    filler = "".join(f"Участник представляет документ номер {i} в составе заявки. " for i in range(80))
+    target = "Размер обеспечения исполнения контракта составляет 30 % начальной цены."
+    blocks = blocks_from_text(f"1. Общие положения\n\n{filler}{target} {filler}")
+    store = InMemorySearch()
+    store.add("doc", chunk_blocks(blocks), embedder=EMBEDDER)
+    _, rules = load_default_checklist()
+    r02 = next(r for r in rules if r.code == "R-02")
+    fake = FakeLLM({"R-02": [(target, "30 % больше порога")]})
+    result = analyze_rule_group(blocks, [r02], document_id="doc", search=store, llm=fake.client(),
+                                embedder=EMBEDDER, budget_tokens=400)
+    prompt = fake.requests[0]["messages"][-1]["content"]
+    assert target in prompt and "…" in prompt and len(prompt) < len(blocks[1].text)  # блок не целиком
+    (found,) = result.candidates
+    assert found.block_id == blocks[1].id and blocks[1].text[found.start : found.end] == target  # смещения в блоке
+
+
 def test_semantic_rule_without_search_reads_windows(contract_blocks):
     _, rules = load_default_checklist()
     r05 = next(r for r in rules if r.code == "R-05")

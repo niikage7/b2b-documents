@@ -61,4 +61,6 @@ class ChunkRecord(BaseModel):
     text: str = Field(description="Текст для поиска: название раздела, номера пунктов и текст блоков")
     page_from: int
     page_to: int
+    char_start: int | None = Field(None, description="Окно одного длинного блока: начало в тексте блока")
+    char_end: int | None = Field(None, description="Конец окна, не включается; None — фрагмент из целых блоков")
     embedding: list[float] | None = None
