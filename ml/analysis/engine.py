@@ -231,12 +231,12 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
         own = call.rule_fragments.get(rule.code) or list(by_index)
         own_blocks = [b for i in own if i in by_index for b in by_index[i].blocks]
         for finding in answer.findings:
-            if not finding.quote.strip():
-                result.dropped.append(DroppedFinding(rule_code=rule.code, quote="", reason="empty_quote"))
-                continue
             if not finding.risk:
                 # Модель проверила условие и риска не нашла: в отчёт не идёт, остаётся в логе
                 result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote, reason="no_risk"))
+                continue
+            if not finding.quote.strip():
+                result.dropped.append(DroppedFinding(rule_code=rule.code, quote="", reason="empty_quote"))
                 continue
             preferred = by_index[finding.fragment].blocks if finding.fragment in by_index else own_blocks
             rest = [b for b in all_blocks if b not in preferred]

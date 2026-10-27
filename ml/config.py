@@ -79,7 +79,9 @@ class Settings:
         default_factory=lambda: _env("LLM_RESPONSE_FORMAT", "json_schema")
     )
     llm_temperature: float = field(default_factory=lambda: _env_float("LLM_TEMPERATURE", 0.0))
-    llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 4000))
+    # Предел ответа, а не его длина: оплачиваются только выданные токены. 4000 не хватало плотному
+    # документу (90 пунктов с риском на 20 страниц): с вердиктом `check`/`risk` ответ группы обрезался.
+    llm_max_tokens: int = field(default_factory=lambda: _env_int("LLM_MAX_TOKENS", 8000))
     # Рассуждения модели (только OpenRouter): `default` — как у модели, `none` — выключить,
     # `minimal` … `max` — уровень. Токены рассуждений входят в LLM_MAX_TOKENS и в стоимость.
     # По умолчанию `none`: на deepseek-v4.1-flash-1017 анализ 20 страниц — 8 с против 15 с с `low`,
