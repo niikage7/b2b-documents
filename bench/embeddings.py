@@ -17,6 +17,11 @@
     python -m bench.embeddings intfloat/multilingual-e5-base --chunk-tokens 60,100,400
     python -m bench.embeddings deepvk/USER-bge-m3 --pages 40
     python -m bench.embeddings intfloat/multilingual-e5-base --set package
+    python -m bench.embeddings sergeyzh/BERTA --seeds 1 --llm    # и сквозная проверка с LLM, около $0,005
+
+`--llm` прогоняет анализ правилами `semantic_llm` с LLM из `LLM_MODEL` на первом перемешивании
+`clauses`: полнота — пункты с риском, у которых есть находка своего правила, точность — находки
+на пунктах с риском этого правила.
 
 Свой эталон для `package`: `--expected file.json` со списком {"rule", "doc", "quote"} и
 `--doc имя=путь`. Модели скачиваются с Hugging Face при первом запуске. Размерность
@@ -144,6 +149,42 @@ def evaluate_clauses(embedder: SentenceTransformerEmbedder, blocks: list[SimpleB
     return out
 
 
+def llm_check(blocks: list[SimpleBlock], labels: dict[str, frozenset[str]], embedder) -> None:
+    """Сквозная проверка: поиск, LLM и привязка цитат на документе из пунктов `bench.clauses`."""
+    from bench.samples import SUBJECT
+    from contracts.analysis import LLMUsage
+    from ml.analysis.engine import analyze_rule_group, group_rules
+    from ml.analysis.search import InMemorySearch
+
+    settings = get_settings()
+    if not (settings.llm_model and settings.llm_api_key):
+        print("\nLLM не настроена (LLM_MODEL, LLM_API_KEY): сквозная проверка пропущена")
+        return
+    _, rules = load_default_checklist()
+    semantic = [r for r in rules if r.kind == "semantic_llm"]
+    codes = {r.code for r in semantic}
+    store = InMemorySearch()
+    store.add("doc", chunk_blocks(blocks), embedder=embedder)
+    risky = {(code, bid) for bid, rule_codes in labels.items() for code in rule_codes if code in codes}
+    found: set[tuple[str, str]] = set()
+    usage = LLMUsage()
+    started = time.perf_counter()
+    for group in group_rules(semantic):
+        result = analyze_rule_group(blocks, group, subject=SUBJECT, document_id="doc", search=store,
+                                    embedder=embedder)
+        usage.add(result.usage)
+        found |= {(c.rule_code, c.block_id) for c in result.candidates}
+    seconds = time.perf_counter() - started
+    hit = found & risky
+    print(f"\nС LLM: полнота {len(hit)} из {len(risky)}, точность {len(hit)} из {len(found)}; вход "
+          f"{usage.prompt_tokens}, выход {usage.completion_tokens} токенов, {seconds:.1f} с, ${usage.cost:.4f}")
+    by_id = {b.id: b for b in blocks}
+    for code, bid in sorted(risky - found):
+        print(f"  пропуск {code}: {by_id[bid].text[:100]}")
+    for code, bid in sorted(found - risky):
+        print(f"  лишняя {code}: {by_id[bid].text[:100]}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("models", nargs="+")
@@ -155,6 +196,7 @@ def main() -> None:
     parser.add_argument("--overlap", type=int, default=get_settings().chunk_overlap, help="перекрытие фрагментов, блоков")
     parser.add_argument("--expected", type=Path, help="JSON со списком {rule, doc, quote} для набора package")
     parser.add_argument("--doc", action="append", default=[], help="имя=путь к документу для своего эталона")
+    parser.add_argument("--llm", action="store_true", help="для clauses: сквозная проверка с LLM на первом перемешивании")
     args = parser.parse_args()
 
     rows = []
@@ -183,6 +225,8 @@ def main() -> None:
                       + f"{avg['need_median']:>12.0f}{max(r[mode]['need_max'] for r in runs):>13}"
                       + f"{statistics.mean(r['per_s'] for r in runs):>10.1f}{load:>10.1f}")
         print("\nПункты синтетические, рассыпаны по документу случайно; решение проверить на своих пакетах")
+        if args.llm:
+            llm_check(*documents[0], SentenceTransformerEmbedder(args.models[0], check_dim=False))
         return
 
     with tempfile.TemporaryDirectory() as tmp:
