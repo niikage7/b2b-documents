@@ -13,13 +13,18 @@
   абзац-заголовок со строчной буквы или скобки сразу после заголовка продолжает его название;
 - `section_title` — ближайший заголовок выше; глубина заголовка — по номеру («4.2» глубже
   «4»), без номера — по уровню из парсера;
-- сноски стоят в конце документа и раздела не получают: ссылкой служит страница.
+- сноски стоят в конце документа и раздела не получают: ссылкой служит страница;
+- ячейка без заголовка документа выше берёт название раздела из строки своей таблицы:
+  жирная ячейка одна в строке, без двоеточия («Обеспечение заявки» в печатной форме
+  извещения ЕИС, которая целиком — таблица). Вложенная таблица без своей такой строки
+  берёт её у внешней.
 """
 
 from __future__ import annotations
 
 import re
 import uuid
+from collections import Counter
 from collections.abc import Sequence
 
 from contracts.document import Block, ChunkRecord
@@ -31,6 +36,7 @@ _NAMESPACE = uuid.UUID("5b6c0f3e-2a7d-4f43-9b1e-3c2f0d4a8e61")
 _DECIMAL = re.compile(r"^(\d{1,3}(?:\.\d{1,3})*)\.?$")
 _ROMAN = re.compile(r"^((?:раздел|глава|часть|статья)\s+)?([IVXLC]{1,7}|\d{1,3})\.?$", re.IGNORECASE)
 _SUB = re.compile(r"^(?:[а-яёa-z]|\d{1,2})\)$", re.IGNORECASE)
+TABLE_HEADING_CHARS = 120
 
 
 def stable_id(document_id: str | None, kind: str, index: int) -> str:
@@ -77,12 +83,24 @@ def _kind(p: RawParagraph) -> str:
     return "paragraph"
 
 
+def _table_heading(p: RawParagraph, cells_in_row: Counter) -> bool:
+    """Строка-заголовок внутри таблицы: жирная ячейка одна в строке, короткая, без двоеточия."""
+    if p.table is None or not p.bold:
+        return False
+    text = p.text.strip()
+    return (cells_in_row[(p.table.table_id, p.table.row)] == 1 and 0 < len(text) <= TABLE_HEADING_CHARS
+            and ":" not in text and not text[0].isdigit())
+
+
 def build_structure(result: ExtractionResult, *, document_id: str | None = None) -> list[Block]:
     """Сырые абзацы → блоки с разделами (`section_number`, `section_title`, `section_block_id`)."""
     blocks: list[Block] = []
     headings: list[tuple[int, Block]] = []  # стек заголовков: (глубина, блок)
     titles: dict[str, str] = {}  # полное название раздела по id заголовка, если он из двух абзацев
     current: str | None = None  # номер пункта, к которому относятся блоки без номера
+    cells_in_row = Counter((p.table.table_id, p.table.row) for p in result.paragraphs if p.table and p.text.strip())
+    table_heads: dict[int, Block] = {}  # последняя строка-заголовок таблицы
+    parents: dict[int, int | None] = {}
     for p in sorted(result.paragraphs, key=lambda x: x.order):
         kind = _kind(p)
         prev = blocks[-1] if blocks else None
@@ -148,6 +166,19 @@ def build_structure(result: ExtractionResult, *, document_id: str | None = None)
             owner = headings[-1][1]
             block.section_block_id = owner.id
             block.section_title = titles.get(owner.id, owner.text)
+        elif in_table and p.stream != "footnote":
+            table = p.table.table_id
+            parents.setdefault(table, p.table.parent_table_id)
+            if _table_heading(p, cells_in_row):
+                table_heads[table] = block
+            owner, seen = None, set()
+            while table is not None and table not in seen and owner is None:
+                seen.add(table)
+                owner = table_heads.get(table)
+                table = parents.get(table)
+            if owner is not None:
+                block.section_block_id = owner.id
+                block.section_title = owner.text.strip()
         blocks.append(block)
     return blocks
 

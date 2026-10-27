@@ -10,8 +10,9 @@
   найти все пункты с риском: по нему видно, хватает ли `SEARCH_BUDGET_TOKENS`. Пункты с
   риском рассыпаны по документу — это труднее, чем в настоящем договоре, где условия одной
   темы стоят в одном разделе;
-- `package` — синтетический пакет `bench.samples` и ожидаемые цитаты `EXPECTED`, поиск по
-  блокам: recall@k блока с цитатой и MRR.
+- `package` — синтетический пакет `bench.samples` и ожидаемые цитаты `EXPECTED`: recall@k
+  блока с цитатой и MRR векторным поиском по блокам, и доля цитат во фрагментах, которые
+  правило получает при бюджете токенов, — гибридом по фрагментам, как в анализе.
 
     python -m bench.embeddings intfloat/multilingual-e5-base sergeyzh/BERTA deepvk/USER2-base
     python -m bench.embeddings intfloat/multilingual-e5-base --chunk-tokens 60,100,400
@@ -86,7 +87,29 @@ def evaluate_package(embedder: SentenceTransformerEmbedder, docs: dict[str, list
         **{f"recall@{k}": hits[k] / n for k in KS},
         "mrr": rr / n,
         "per_s": n_blocks / encode if encode else 0.0,
+        **budget_recall(embedder, docs, expected, rules),
     }
+
+
+def budget_recall(embedder: SentenceTransformerEmbedder, docs: dict[str, list], expected: list[dict],
+                  rules: dict) -> dict:
+    """Доля цитат во фрагментах правила при бюджете: фрагменты, гибрид и бюджет — как в анализе."""
+    chunks, lexical = {}, {}
+    for name, blocks in docs.items():
+        chunks[name] = chunk_blocks(blocks)
+        for chunk, vector in zip(chunks[name], embedder.embed([c.text for c in chunks[name]], "passage"), strict=True):
+            chunk.embedding = vector
+        lexical[name] = LexicalIndex([c.text for c in chunks[name]])
+    covered = {b: 0 for b in BUDGETS}
+    for item in expected:
+        rule = rules[item["rule"]]
+        vector = embedder.embed([rule_query_text(rule)], "query")[0]
+        hits = rank_chunks(chunks[item["doc"]], vector, rule_search_text(rule), mode="hybrid",
+                           lexical=lexical[item["doc"]])
+        quote = normalize_map(item["quote"])[0]
+        for budget in BUDGETS:
+            covered[budget] += any(quote in normalize_map(h.text)[0] for h in take_budget(hits, budget))
+    return {f"budget@{b}": covered[b] / len(expected) for b in BUDGETS}
 
 
 def clauses_document(pages: int, seed: int) -> tuple[list[SimpleBlock], dict[str, frozenset[str]]]:
@@ -245,11 +268,13 @@ def main() -> None:
             embedder = SentenceTransformerEmbedder(model, check_dim=False)
             embedder.embed(["прогрев"], "passage")
             rows.append((model, evaluate_package(embedder, docs, expected), 0.0))
-    header = f"{'модель':<55}" + "".join(f"{'R@' + str(k):>7}" for k in KS) + f"{'MRR':>7}{'блок/с':>9}"
+    header = (f"{'модель':<55}" + "".join(f"{'R@' + str(k):>7}" for k in KS) + f"{'MRR':>7}{'блок/с':>9}"
+              + "".join(f"{'B' + str(b):>7}" for b in BUDGETS))
     print(header)
     for model, row, _ in rows:
         print(f"{model:<55}" + "".join(f"{row[f'recall@{k}']:>7.2f}" for k in KS)
-              + f"{row['mrr']:>7.2f}{row['per_s']:>9.1f}")
+              + f"{row['mrr']:>7.2f}{row['per_s']:>9.1f}" + "".join(f"{row[f'budget@{b}']:>7.2f}" for b in BUDGETS))
+    print("\nR@k и MRR — векторный поиск по блокам; B<бюджет> — доля цитат во фрагментах правила, гибрид")
     if not args.expected:
         print(f"\nзапросов: {len(expected)}; эталон синтетический, решение — по своим пакетам")
 

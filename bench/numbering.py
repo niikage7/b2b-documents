@@ -22,6 +22,7 @@ from ml.extract.layout import group_lines
 from ml.extract.pdf_text import page_text_words
 
 _SPACE = re.compile(r"\s+")
+_NUMBER_WIDTH = 16
 
 
 @dataclass
@@ -56,10 +57,19 @@ def check(path: Path) -> Report:
     checked = 0
     cursor = 0  # строки рендера просматриваются по порядку: одинаковые начала пунктов не путаются
     for item in numbered:
-        head = _norm(item.text)[:30]
-        if len(head) < 5:
+        if len(_norm(item.text)) < 5:
             continue
-        pos = next((i for i in range(cursor, len(lines)) if head in lines[i]), None)
+        pos = None
+        # Начало в 45 знаков различает пункты, которые начинаются одинаково; если первая строка
+        # пункта короче — 30. Сначала строка, где текст стоит сразу после номера: то же
+        # предложение может встретиться внутри предыдущего пункта («…Закона. Уменьшение размера…»)
+        for size in (45, 30):
+            head = _norm(item.text)[:size]
+            pos = next((i for i in range(cursor, len(lines)) if 0 <= lines[i].find(head) <= _NUMBER_WIDTH), None)
+            if pos is not None:
+                break
+        if pos is None:
+            pos = next((i for i in range(cursor, len(lines)) if head in lines[i]), None)
         if pos is None:
             continue
         cursor = pos + 1

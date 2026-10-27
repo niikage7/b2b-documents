@@ -86,6 +86,46 @@ def test_heading_split_into_two_paragraphs_is_one_section():
     ]
 
 
+def test_print_form_table_rows_give_section_titles():
+    """Печатная форма ЕИС — одна таблица без заголовков документа: раздел ячейки — жирная строка
+    таблицы над ней. Не жирная строка без двоеточия («Требуется обеспечение заявки») — не заголовок."""
+    def cell(order, text, row, *, bold=False, table=0, parent=None, col=0):
+        p = para(order, text, table=TableCellRef(table_id=table, row=row, col=col, is_layout=True,
+                                                 parent_table_id=parent))
+        p.bold = bold
+        return p
+
+    blocks = build_structure(result(
+        para(0, "Извещение о проведении электронного аукциона"),
+        cell(1, "Обеспечение заявки", 0, bold=True),
+        cell(2, "Требуется обеспечение заявки", 1),
+        cell(3, "Размер обеспечения заявки: 7789.41 РОССИЙСКИЙ РУБЛЬ", 2),
+        cell(4, "Характеристики товара ( Ветошь )", 0, bold=True, table=1, parent=0),
+        cell(5, "Материал", 1, table=1, parent=0),
+        cell(6, "Хлопок", 1, table=1, parent=0, col=1),
+        cell(7, "Объём", 0, table=2, parent=0),
+        cell(8, "Подпись: Иванов", 3, bold=True),
+    ))
+    titles = [b.section_title for b in blocks]
+    assert titles[:4] == [None, "Обеспечение заявки", "Обеспечение заявки", "Обеспечение заявки"]
+    assert titles[4:7] == ["Характеристики товара ( Ветошь )"] * 3
+    # Вложенная таблица без своей строки-заголовка берёт её у внешней; жирная ячейка с двоеточием — не заголовок
+    assert titles[7:] == ["Обеспечение заявки", "Обеспечение заявки"]
+    assert blocks[3].section_block_id == blocks[1].id
+
+
+def test_table_rows_do_not_override_document_headings():
+    p = para(2, "Характеристики", table=TableCellRef(table_id=0, row=0, col=0))
+    p.bold = True
+    blocks = build_structure(result(
+        para(0, "Спецификация", heading=1),
+        para(1, "Таблица характеристик товара"),
+        p,
+        para(3, "Цвет", table=TableCellRef(table_id=0, row=1, col=0)),
+    ))
+    assert {b.section_title for b in blocks} == {"Спецификация"}
+
+
 def test_ids_are_stable_and_chunks_have_pages():
     res = result(para(0, "Цена", number="2.", heading=1), para(1, "Цена составляет 100 рублей.", number="2.1."),
                  para(2, "слово " * 300, number="2.2.", page=2),
