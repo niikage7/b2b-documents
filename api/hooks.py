@@ -18,3 +18,11 @@ def enqueue_batch(batch_id: str) -> None:
 def enqueue_rerun(batch_id: str, document_ids: list[str]) -> None:
     """Повторный анализ документов пакета: поставить `analyze_document` для каждого."""
     log.info("Пакет %s: повторный анализ %d документов (конвейер подключается на этапе 4)", batch_id, len(document_ids))
+
+
+def publish_recalc(recalc: dict) -> None:
+    """Находку изменили: разослать подписчикам пакета `document.done` с пересчётом цвета и счётчиков.
+
+    Точка подключения этапа 6 (SSE через Redis). Вызывается после фиксации транзакции.
+    """
+    log.debug("Пересчёт документа %s: публикация событий подключается на этапе 6", recalc["document"]["id"])
