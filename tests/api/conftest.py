@@ -27,12 +27,20 @@ def settings_env(monkeypatch):
 
 
 @pytest.fixture
-def app(s, settings_env):  # noqa: F811
+def storage():
+    from storage import MemoryStorage
+
+    return MemoryStorage()
+
+
+@pytest.fixture
+def app(s, settings_env, storage):  # noqa: F811
     from api.app import create_app
-    from api.deps import get_session
+    from api.deps import get_session, get_storage
 
     application = create_app()
     application.dependency_overrides[get_session] = lambda: s
+    application.dependency_overrides[get_storage] = lambda: storage
     return application
 
 

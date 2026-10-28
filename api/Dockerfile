@@ -15,6 +15,7 @@ COPY pyproject.toml ./
 COPY contracts ./contracts
 COPY ml ./ml
 COPY db ./db
+COPY storage ./storage
 COPY api ./api
 # pymupdf 2.x тянет onnxruntime, networkx и pymupdf-layout для разметки страниц; check_file ими не пользуется
 RUN pip install ".[api,db]" \

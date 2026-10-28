@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterator
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Request
@@ -16,6 +17,7 @@ from db import users
 from db.errors import Forbidden, NotFound
 from db.models import User
 from db.session import session_factory
+from storage import MinioStorage, Storage
 
 
 def get_session() -> Iterator[Session]:
@@ -69,3 +71,17 @@ def require_role(*roles: str, message: str | None = None) -> Callable[..., User]
         return user
 
     return dependency
+
+
+@lru_cache(maxsize=1)
+def _minio(endpoint: str, access_key: str, secret_key: str, bucket: str, secure: bool) -> MinioStorage:
+    return MinioStorage(endpoint, access_key, secret_key, bucket, secure=secure)
+
+
+def get_storage(settings: SettingsDep) -> Storage:
+    """Клиент MinIO; в тестах подставляется `MemoryStorage` через `app.dependency_overrides`."""
+    return _minio(settings.minio_endpoint, settings.minio_access_key, settings.minio_secret_key,
+                  settings.minio_bucket, settings.minio_secure)
+
+
+StorageDep = Annotated[Storage, Depends(get_storage)]
