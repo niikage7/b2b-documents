@@ -4,7 +4,7 @@
 
 Проект делает команда из пяти человек для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов». Этап 1 — месяц удалённо, этап 2 — 48 часов очно с дополнительным заданием.
 
-На 27 октября 2026 в репозитории есть ML-часть и слой данных (ветка `dev`); API, фронтенда и docker-compose ещё нет. Когда они появятся, допишите сюда их каталоги и команды запуска.
+На 29 октября 2026 в репозитории есть ML-часть, слой данных и фронтенд (ветка `dev`); API и docker-compose ещё нет. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду». Когда появятся API и docker-compose, допишите сюда их каталоги и команды запуска.
 
 ## Код и команды
 
@@ -15,6 +15,7 @@
 | `db/` | Таблицы PostgreSQL (SQLAlchemy), миграции Alembic, функции для API и задач Celery, сид; описание — в [db/README.md](db/README.md) |
 | `bench/` | Стенды: генератор сканов, 1 − CER, сверка нумерации, выбор bi-encoder, сквозной прогон, модели решений против LLM; синтетический пакет с заложенными рисками, размеченные пункты (`clauses.py`) и разметка трёх открытых пакетов 44-ФЗ (`packages/`) |
 | `tests/` | pytest; эталонные снимки парсера — в `tests/snapshots/` |
+| `frontend/` | SPA на React + Vite: шесть экранов, клиент API, мок API с тем же контрактом; описание — в [frontend/README.md](frontend/README.md) |
 
 ```bash
 uv venv --python 3.12 .venv
@@ -22,6 +23,10 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,dev]"
 .venv/bin/python -m pytest              # тесты OCR пропускаются без Tesseract rus+eng, тесты db — без TEST_DATABASE_URL
 .venv/bin/ruff check contracts ml bench tests db
 .venv/bin/alembic -c db/alembic.ini upgrade head   # схема БД по DATABASE_URL
+
+cd frontend && npm install
+npm run dev:mock                         # интерфейс на моке API: http://localhost:5173, пароль demo
+npm run typecheck && npm run lint && npm test
 ```
 
 ML-код уже следует «Требованиям к бэкенду» от 6 октября (документа нет в репозитории): уровни находки `critical` и `warning`, типы правил `semantic_llm` и `llm`, переменные правил. Правило «`red` и `yellow`» ниже написано до этого документа — уточните у команды, прежде чем опираться на него.
@@ -67,6 +72,7 @@ ML-код уже следует «Требованиям к бэкенду» о�
 Организатор задал допустимые технологии по слоям (см. [docs/hackathon.md](docs/hackathon.md)). Выбор команды, зафиксированный в [docs/tasks.md](docs/tasks.md):
 
 - **Бэкенд:** Python, REST API, Pydantic, Alembic, SSE для прогресса, JWT в httpOnly cookie.
+- **Фронтенд:** React + TypeScript, сборка Vite, TanStack Query, React Router; статика за nginx (выбрано 29 октября вместо Next.js из «Архитектуры»: чистое SPA без серверной части).
 - **Очереди:** Celery, очереди `ingest`, `ocr`, `analysis`, `export`; Flower для мониторинга.
 - **Данные:** PostgreSQL + pgvector (индекс HNSW), файлы — в MinIO.
 - **Извлечение текста:** PyMuPDF для pdf, python-docx ≥ 1.2 для docx, LibreOffice headless для doc и rtf, Tesseract `rus+eng` с предобработкой OpenCV для сканов.
@@ -76,7 +82,6 @@ ML-код уже следует «Требованиям к бэкенду» о�
 Не зафиксировано в документах — уточняйте у команды, не выбирайте молча:
 
 - веб-фреймворк бэкенда (FastAPI или Django);
-- фреймворк фронтенда (React, Vue.js или Next.js);
 - брокер Celery (Redis или RabbitMQ);
 - провайдер LLM (внешний API или локальный vLLM) и модель эмбеддингов (в документах назван пример — multilingual-e5);
 - состав восьми сервисов docker-compose.

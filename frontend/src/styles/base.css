@@ -1,0 +1,203 @@
+/* Токены и базовые стили. Цвета уровней всегда идут вместе с подписью или иконкой. */
+
+:root {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-muted: #f7f8fa;
+  --surface-hover: #f2f4f7;
+  --border: #e4e7ec;
+  --border-strong: #cdd2da;
+  --text: #141821;
+  --text-muted: #555e6e;
+  --text-subtle: #858d9b;
+
+  --primary: #234f7e;
+  --primary-hover: #1b4068;
+  --primary-soft: #e9eff7;
+  --primary-text: #1f4a77;
+
+  --sidebar: #141923;
+  --sidebar-hover: #212836;
+  --sidebar-active: #262e3d;
+  --sidebar-text: #c6ccd6;
+  --sidebar-muted: #8790a0;
+
+  --critical: #d92d20;
+  --critical-text: #b42318;
+  --critical-soft: #fde8e6;
+  --critical-mark: #f7cbc5;
+  --critical-line: #e8796d;
+
+  --warning: #e39b00;
+  --warning-text: #8a5700;
+  --warning-soft: #fdf2d3;
+  --warning-mark: #fbe3a6;
+  --warning-line: #e6b53e;
+
+  --ok: #2f9e5b;
+  --ok-text: #1d7742;
+  --ok-soft: #e2f4e9;
+
+  --neutral: #9aa1ac;
+  --neutral-text: #5b6372;
+  --neutral-soft: #eef0f3;
+
+  --search-mark: #c9dcf5;
+  --selection-mark: #cfe0fa;
+
+  --focus-ring: 0 0 0 3px rgba(35, 79, 126, 0.28);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.16), 0 2px 6px rgba(16, 24, 40, 0.08);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-doc: 'PT Serif', Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, monospace;
+
+  --sidebar-width: 248px;
+  --sidebar-collapsed: 56px;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* 1280 px — ширина окна вместе с вертикальной полосой прокрутки */
+  min-width: 1260px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv11', 'tnum' 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+a {
+  color: var(--primary-text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::selection {
+  background: var(--selection-mark);
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.subtle {
+  color: var(--text-subtle);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-critical {
+  color: var(--critical-text);
+}
+
+.text-warning {
+  color: var(--warning-text);
+}
+
+.text-ok {
+  color: var(--ok-text);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spacer {
+  flex: 1;
+}

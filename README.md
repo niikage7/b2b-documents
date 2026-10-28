@@ -6,7 +6,17 @@
 
 ## Запуск
 
-Раздел появится вместе с кодом: пошаговая инструкция для `docker-compose up --build` и примеры API-запросов.
+Полная инструкция для `docker-compose up --build` и примеры API-запросов появятся вместе с API и docker-compose.
+
+Интерфейс уже можно посмотреть без бэкенда — на встроенном моке API (Node.js 22):
+
+```bash
+cd frontend
+npm install
+npm run dev:mock
+```
+
+Откройте http://localhost:5173 и войдите как `methodologist`, `lawyer` или `specialist` с паролем `demo`. Подробнее — в [frontend/README.md](frontend/README.md).
 
 ## Документация
 

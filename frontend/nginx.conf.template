@@ -1,0 +1,54 @@
+# Фронтенд: статика SPA и прокси /api на бэкенд. ${API_UPSTREAM} подставляет образ nginx при старте.
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # Пакет до 100 МБ уходит одним multipart-запросом
+    client_max_body_size 110m;
+
+    # Адрес API резолвится при запросе, а не при старте: nginx поднимается, даже если API ещё не готов
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+    set $api_upstream ${API_UPSTREAM};
+
+    location = /healthz {
+        access_log off;
+        return 200 'ok';
+        add_header Content-Type text/plain;
+    }
+
+    # Прогресс обработки (SSE): без буферизации и с долгим таймаутом
+    location ~ ^/api/batches/[^/]+/events$ {
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
+    }
+
+    location /api/ {
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_read_timeout 120s;
+    }
+
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # Маршруты SPA (/batches/…, /documents/…) отдаёт index.html
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+}

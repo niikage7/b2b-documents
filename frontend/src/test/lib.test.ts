@@ -1,0 +1,128 @@
+import { layoutCallouts } from '../lib/calloutLayout';
+import { countLabel, formatEta } from '../lib/format';
+import { validateRule } from '../lib/ruleValidation';
+import { buildSegments, findMatches } from '../lib/segments';
+import { selectionToBlock } from '../lib/selection';
+
+describe('buildSegments', () => {
+  const text = 'Поставка Товара осуществляется в течение 3 (трёх) календарных дней.';
+
+  it('покрывает весь текст без пересечений', () => {
+    const segs = buildSegments(text, [
+      { kind: 'finding', findingId: 'a', level: 'warning', start: 0, end: 30 },
+      { kind: 'finding', findingId: 'b', level: 'critical', start: 16, end: 50 },
+    ]);
+    expect(segs.map((s) => s.text).join('')).toBe(text);
+    expect(segs[0]).toMatchObject({ start: 0, end: 16, level: 'warning', startsFindings: ['a'] });
+    expect(segs[1]).toMatchObject({ start: 16, end: 30, level: 'critical', findingIds: ['a', 'b'], startsFindings: ['b'] });
+    expect(segs[2]).toMatchObject({ start: 30, end: 50, level: 'critical' });
+    expect(segs[3]).toMatchObject({ level: null, findingIds: [] });
+  });
+
+  it('отклонённая находка не даёт цвета', () => {
+    const [seg] = buildSegments('abc', [{ kind: 'finding', findingId: 'a', level: 'critical', rejected: true, start: 0, end: 3 }]);
+    expect(seg).toMatchObject({ level: null, rejectedOnly: true });
+  });
+
+  it('обрезает диапазоны по длине текста', () => {
+    const segs = buildSegments('abc', [{ kind: 'search', start: 2, end: 10 }]);
+    expect(segs.map((s) => [s.text, s.search])).toEqual([
+      ['ab', false],
+      ['c', true],
+    ]);
+  });
+});
+
+describe('findMatches', () => {
+  it('ищет без учёта регистра и ё', () => {
+    expect(findMatches('Трёх дней, ТРЕХ недель', 'трех')).toEqual([
+      { start: 0, end: 4 },
+      { start: 11, end: 15 },
+    ]);
+    expect(findMatches('abc', 'a')).toEqual([]);
+  });
+});
+
+describe('selectionToBlock', () => {
+  it('переводит выделение в смещения текста блока', () => {
+    document.body.innerHTML = `<div id="root"><p><span>3.2.</span><span data-block-text="k12"><span>Поставка </span><mark>Товара</mark><span> осуществляется</span></span></p></div>`;
+    const root = document.getElementById('root')!;
+    const mark = root.querySelector('mark')!.firstChild!;
+    const tail = root.querySelectorAll('[data-block-text] > span')[1].firstChild!;
+    const range = document.createRange();
+    range.setStart(mark, 0);
+    range.setEnd(tail, 15);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionToBlock(sel, root)).toEqual({ ok: true, value: { blockId: 'k12', start: 9, end: 30, text: 'Товара осуществляется' } });
+  });
+
+  it('не принимает выделение через несколько пунктов', () => {
+    document.body.innerHTML = `<div id="root"><span data-block-text="a">первый</span><span data-block-text="b">второй</span></div>`;
+    const root = document.getElementById('root')!;
+    const [a, b] = root.querySelectorAll('[data-block-text]');
+    const range = document.createRange();
+    range.setStart(a.firstChild!, 1);
+    range.setEnd(b.firstChild!, 2);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionToBlock(sel, root)).toEqual({ ok: false, reason: 'multiple-blocks' });
+  });
+});
+
+describe('layoutCallouts', () => {
+  it('сдвигает выноски вниз и сворачивает далеко сдвинутые', () => {
+    const out = layoutCallouts([
+      { id: 'a', anchor: 0, height: 100 },
+      { id: 'b', anchor: 20, height: 100 },
+      { id: 'c', anchor: 400, height: 100 },
+    ]);
+    expect(out).toEqual([
+      { id: 'a', top: 0, anchor: 0, compact: false },
+      { id: 'b', top: 110, anchor: 20, compact: true },
+      { id: 'c', top: 400, anchor: 400, compact: false },
+    ]);
+  });
+
+  it('не сворачивает активную выноску', () => {
+    const out = layoutCallouts([
+      { id: 'a', anchor: 0, height: 100 },
+      { id: 'b', anchor: 20, height: 100, active: true },
+    ]);
+    expect(out[1]).toMatchObject({ top: 110, compact: false });
+  });
+});
+
+describe('validateRule', () => {
+  const base = {
+    code: 'R-04', title: 'Срок', description: 'Описание', level: 'critical' as const, kind: 'semantic_llm' as const,
+    prompt_template: 'Проверь {фрагмент}: срок меньше {порог} дней', variables: [{ name: 'порог', type: 'number' as const, value: '10' }],
+  };
+
+  it('принимает корректное правило', () => {
+    expect(validateRule(base)).toEqual({ fields: {}, warnings: [] });
+  });
+
+  it('находит неописанную переменную и отсутствие {фрагмент}', () => {
+    expect(validateRule({ ...base, prompt_template: 'Срок меньше {лимит}' }).fields.prompt_template).toBe('Переменная {лимит} не описана');
+    expect(validateRule({ ...base, prompt_template: 'Срок меньше {порог}' }).fields.prompt_template).toMatch(/\{фрагмент\}/);
+  });
+
+  it('проверяет значения и предупреждает о неиспользуемых', () => {
+    const r = validateRule({ ...base, variables: [...base.variables, { name: 'x', type: 'number', value: 'abc' }] });
+    expect(r.fields['variables[1].value']).toBe('Нужно число, например 10 или 0,5');
+    expect(r.warnings).toEqual(['Переменная {x} описана, но не используется в инструкции']);
+  });
+});
+
+describe('format', () => {
+  it('склоняет и оценивает время', () => {
+    expect(countLabel(1, ['файл', 'файла', 'файлов'])).toBe('1 файл');
+    expect(countLabel(3, ['файл', 'файла', 'файлов'])).toBe('3 файла');
+    expect(countLabel(11, ['файл', 'файла', 'файлов'])).toBe('11 файлов');
+    expect(formatEta(38)).toBe('осталось около 40 секунд');
+    expect(formatEta(150)).toBe('осталось около 3 минут');
+  });
+});
