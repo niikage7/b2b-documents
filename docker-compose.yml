@@ -1,0 +1,83 @@
+# Светофор рисков: окружение целиком. Запуск: docker compose up --build
+# Значения берутся из .env (шаблон — .env.example); без .env подставляются безопасные для разработки.
+# Состав растёт по этапам: здесь БД, Redis, MinIO и API; воркеры, Flower и фронтенд добавляются позже.
+
+name: b2b
+
+x-healthcheck-defaults: &hc
+  interval: 5s
+  timeout: 5s
+  retries: 20
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-b2b}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-b2b}
+      POSTGRES_DB: ${POSTGRES_DB:-b2b}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      <<: *hc
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      <<: *hc
+    restart: unless-stopped
+
+  minio:
+    # Официальные образы minio/minio с Docker Hub и Quay недоступны; последний открытый выпуск
+    # (2025.7.23) лежит в замороженном репозитории bitnamilegacy. S3 API полностью совместим
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r3
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-b2b-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-b2b-minio-secret}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_BUCKET:-b2b-documents}
+    volumes:
+      - miniodata:/bitnami/minio/data
+    ports:
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      <<: *hc
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-b2b}:${POSTGRES_PASSWORD:-b2b}@db:5432/${POSTGRES_DB:-b2b}
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-b2b-minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-b2b-minio-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-b2b-documents}
+      # Значения по умолчанию годятся только для локальной разработки: в рабочем окружении задайте свои в .env
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me-in-env}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

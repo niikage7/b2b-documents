@@ -4,7 +4,7 @@
 
 Проект делает команда из пяти человек для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов». Этап 1 — месяц удалённо, этап 2 — 48 часов очно с дополнительным заданием.
 
-На 29 октября 2026 в репозитории есть ML-часть, слой данных и фронтенд (ветка `dev`); API и docker-compose ещё нет. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду». Когда появятся API и docker-compose, допишите сюда их каталоги и команды запуска.
+На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд и каркас API (вход, `/api/config`, `/api/healthz`) с docker-compose из четырёх сервисов (ветка `dev`); остальные эндпоинты, очереди Celery и воркеры ещё впереди. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду».
 
 ## Код и команды
 
@@ -15,14 +15,18 @@
 | `db/` | Таблицы PostgreSQL (SQLAlchemy), миграции Alembic, функции для API и задач Celery, сид; описание — в [db/README.md](db/README.md) |
 | `bench/` | Стенды: генератор сканов, 1 − CER, сверка нумерации, выбор bi-encoder, сквозной прогон, модели решений против LLM; синтетический пакет с заложенными рисками, размеченные пункты (`clauses.py`) и разметка трёх открытых пакетов 44-ФЗ (`packages/`) |
 | `tests/` | pytest; эталонные снимки парсера — в `tests/snapshots/` |
+| `api/` | FastAPI: приложение `api.app:create_app`, вход (JWT в httpOnly cookie), единый формат ошибок, `Dockerfile` лёгкого образа; запуск и состав окружения — в `docker-compose.yml` |
 | `frontend/` | SPA на React + Vite: шесть экранов, клиент API, мок API с тем же контрактом; описание — в [frontend/README.md](frontend/README.md) |
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,dev]"
+uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,api,dev]"
 .venv/bin/python -m pytest              # тесты OCR пропускаются без Tesseract rus+eng, тесты db — без TEST_DATABASE_URL
-.venv/bin/ruff check contracts ml bench tests db
+.venv/bin/ruff check contracts ml bench tests db api
 .venv/bin/alembic -c db/alembic.ini upgrade head   # схема БД по DATABASE_URL
+
+docker compose up --build                # db, redis, minio, api: http://localhost:8000/api/docs; вход demo-пользователями, пароль из DEMO_PASSWORD (по умолчанию demo)
+TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bin/python -m pytest tests/api
 
 cd frontend && npm install
 npm run dev:mock                         # интерфейс на моке API: http://localhost:5173, пароль demo
