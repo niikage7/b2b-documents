@@ -137,7 +137,7 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
           <span className="fc__title">{title(f)}</span>
           <span className="fc__meta">
             {shortSection(f)}
-            {(f.decided_by || f.author) && f.status !== 'new' && ` · ${(f.decided_by ?? f.author)!.full_name}, ${formatWhen(f.decided_at)}`}
+            {(f.decided_by || f.author) && f.status !== 'new' && ` · ${(f.decided_by ?? f.author)!.full_name}${formatWhen(f.decided_at ?? f.created_at) ? `, ${formatWhen(f.decided_at ?? f.created_at)}` : ''}`}
           </span>
         </button>
       </div>
@@ -231,7 +231,20 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
               { value: 'warning', label: <><span className="dot dot--warning" /> Внимание</> },
             ]}
           />
-          <textarea className="textarea" rows={3} placeholder="Комментарий юриста" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Комментарий" />
+          <textarea
+            className="textarea"
+            rows={3}
+            placeholder="Комментарий юриста"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            aria-label="Комментарий"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
           <div className="row">
             <Button size="sm" variant="primary" type="submit" loading={busy === 'edit'}>
               Сохранить
@@ -249,7 +262,21 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
             if (await run('comment', { comment: comment.trim() })) setCommenting(false);
           }}
         >
-          <textarea className="textarea" rows={3} autoFocus placeholder="Например: направить запрос на разъяснение" value={comment} onChange={(e) => setComment(e.target.value)} aria-label="Комментарий" />
+          <textarea
+            className="textarea"
+            rows={3}
+            autoFocus
+            placeholder="Например: направить запрос на разъяснение"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            aria-label="Комментарий"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+          />
           <div className="row">
             <Button size="sm" variant="primary" type="submit" loading={busy === 'comment'}>
               Сохранить

@@ -399,7 +399,13 @@ function Editor({ doc }: { doc: DocumentView }) {
     if (target.kind === 'block' && target.id) el = root.querySelector(`[data-block-id="${CSS.escape(target.id)}"]`);
     if (el) {
       scrollTarget.current = null;
+      const findingId = target.kind === 'finding' ? target.id : null;
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      if (findingId) {
+        requestAnimationFrame(() => {
+          cardEls.current.get(findingId)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        });
+      }
     }
   });
 
@@ -625,6 +631,10 @@ function Editor({ doc }: { doc: DocumentView }) {
                   const delta = !searchStarted.current ? 0 : e.shiftKey ? -1 : 1;
                   searchStarted.current = true;
                   void goToMatch(matchIndex + delta);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setSearch('');
+                  (e.target as HTMLElement).blur();
                 }
               }}
             />

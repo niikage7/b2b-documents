@@ -114,7 +114,19 @@ export function NewMarkPopover({
       />
       <label className="field">
         <span className="field__label">Комментарий</span>
-        <textarea className="textarea" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Например: отсрочка оплаты 30 дней — заложить в цену" />
+        <textarea
+          className="textarea"
+          rows={3}
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Например: отсрочка оплаты 30 дней — заложить в цену"
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
       </label>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <Button size="sm" onClick={onCancel}>

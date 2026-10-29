@@ -1,5 +1,6 @@
 import { layoutCallouts } from '../lib/calloutLayout';
-import { countLabel, formatEta } from '../lib/format';
+import { countLabel, formatEta, formatWhen } from '../lib/format';
+import { sectionLabel } from '../pages/document/FindingCard';
 import { validateRule } from '../lib/ruleValidation';
 import { buildSegments, findMatches } from '../lib/segments';
 import { selectionToBlock } from '../lib/selection';
@@ -124,5 +125,29 @@ describe('format', () => {
     expect(countLabel(11, ['файл', 'файла', 'файлов'])).toBe('11 файлов');
     expect(formatEta(38)).toBe('осталось около 40 секунд');
     expect(formatEta(150)).toBe('осталось около 3 минут');
+    expect(formatWhen(null)).toBe('');
+    expect(formatWhen(undefined)).toBe('');
+  });
+});
+
+describe('sectionLabel', () => {
+  it('форматирует номер, раздел и страницу', () => {
+    expect(sectionLabel({ section_number: '3.2', section_title: 'Сроки поставки', page: 5 })).toBe('п. 3.2 «Сроки поставки», стр. 5');
+  });
+
+  it('работает без названия раздела', () => {
+    expect(sectionLabel({ section_number: '3.2', section_title: null, page: 5 })).toBe('п. 3.2, стр. 5');
+  });
+
+  it('работает без номера пункта', () => {
+    expect(sectionLabel({ section_number: null, section_title: 'Сроки', page: 2 })).toBe('раздел «Сроки», стр. 2');
+  });
+
+  it('работает только со страницей', () => {
+    expect(sectionLabel({ section_number: null, section_title: null, page: 7 })).toBe('стр. 7');
+  });
+
+  it('отдаёт дефолт при отсутствии данных', () => {
+    expect(sectionLabel({ section_number: null, section_title: null, page: null })).toBe('раздел не определён');
   });
 });
