@@ -88,3 +88,5 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Влад | Контракт 2 ([`contracts/extraction.py`](../contracts/extraction.py)) — черновик: поля `RawParagraph`, карта runs и рамки слов |
 | Влад | `ocr_pages` возвращает только слова, абзацы собирает `build_pdf_result` после всех групп — это меняет контракт 3 |
 | Влад | Рамки в системе координат `page.get_text`: подсветка `add_highlight_annot` на странице с `/Rotate 90` проверена тестом |
+| Влад | Экспорт (FR-7.1, FR-7.2): задача `export_document` может звать `ml.annotate_docx` или `ml.annotate_pdf` с находками `db.exports.export_payload` — разрезание runs, заливка, комментарии Word и подсветки PDF уже сделаны и проверены на открытых пакетах; остаются MinIO, `finish_export` и событие `export.done` |
+| Влад, фронтенд | Запрос о даче разъяснений: `ml.draft_clarification` и `db.exports.clarification_input` готовы, эндпоинта и кнопки нет |

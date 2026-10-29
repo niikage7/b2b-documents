@@ -10,7 +10,9 @@
 
 Цитата из ответа привязывается к тексту блока; раздел и страницу находке даёт блок, а не
 ответ LLM. Ответ с вердиктом `risk=false` (условие проверено, риска нет) находкой не
-становится. Уровень находки — уровень правила.
+становится. Затем кандидат с уверенностью ниже `LLM_VERIFY_BELOW` проходит второй взгляд:
+короткий вызов с одним правилом и одной цитатой в её пункте; кандидат, которого модель не
+подтвердила, уходит в отброшенные. Уровень находки — уровень правила.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from contracts.analysis import (
     FindingCandidate,
     LLMGroupResponse,
     LLMUsage,
+    LLMVerdict,
     RuleGroupResult,
     RuleSpec,
 )
@@ -33,10 +36,11 @@ from ml.analysis.anchor import anchor_quote
 from ml.analysis.blocks import BlockLike, Fragment, Selection, estimate_tokens, excerpt, select_hit
 from ml.analysis.embeddings import Embedder, embed_texts
 from ml.analysis.llm import LLMClient, default_client
-from ml.analysis.prompts import group_prompt
+from ml.analysis.prompts import group_prompt, verify_prompt
 from ml.analysis.search import ChunkSearch, LexicalIndex, rank_chunks, take_budget
 from ml.analysis.templates import rule_query_text, rule_search_text
 from ml.config import get_settings
+from ml.errors import MLError
 
 log = logging.getLogger(__name__)
 
@@ -209,8 +213,13 @@ def analyze_rule_group(
     for call, answer in answers:
         usage.add(answer.usage)
         _collect(call, answer.data, result)
-    result.usage = usage
     result.candidates = _dedupe(result.candidates, result.dropped)
+    doubtful = [c for c in result.candidates if c.confidence < settings.llm_verify_below]
+    if doubtful:
+        rejected = _verify(doubtful, ordered, {r.code: r for r in active}, subject=subject, llm=llm, usage=usage,
+                           dropped=result.dropped, workers=settings.llm_max_concurrency)
+        result.candidates = [c for c in result.candidates if id(c) not in rejected]
+    result.usage = usage
     result.checked_rules = [r.code for r in active]
     if result.dropped:
         for d in result.dropped:
@@ -263,6 +272,68 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
                     match_score=anchor.score,
                 )
             )
+
+
+# Сколько текста вокруг цитаты видит второй взгляд: соседние блоки и окно длинного блока
+_CONTEXT_BEFORE, _CONTEXT_AFTER, _NEIGHBOUR_CHARS, _OWN_CHARS = 2, 1, 600, 1600
+
+
+def _context(block: BlockLike, start: int, end: int, ordered: list[BlockLike], pos: dict[str, int]) -> str:
+    """Пункт с цитатой и его соседи — как в документе, с номерами пунктов."""
+
+    def line(b: BlockLike, text: str) -> str:
+        number = getattr(b, "number", None)
+        return f"{number} {text}" if number else text
+
+    i = pos[block.id]
+    own = block.text
+    if len(own) > _OWN_CHARS:
+        pad = max(0, (_OWN_CHARS - (end - start)) // 2)
+        own = excerpt(own, [(max(0, start - pad), min(len(own), end + pad))])
+    before = [line(b, b.text[-_NEIGHBOUR_CHARS:]) for b in ordered[max(0, i - _CONTEXT_BEFORE):i]]
+    after = [line(b, b.text[:_NEIGHBOUR_CHARS]) for b in ordered[i + 1:i + 1 + _CONTEXT_AFTER]]
+    return "\n".join([*before, line(block, own), *after])
+
+
+def _verify(
+    candidates: list[FindingCandidate],
+    ordered: list[BlockLike],
+    rules: dict[str, RuleSpec],
+    *,
+    subject: str | None,
+    llm: LLMClient,
+    usage: LLMUsage,
+    dropped: list[DroppedFinding],
+    workers: int,
+) -> set[int]:
+    """Второй взгляд на кандидатов; возвращает `id()` неподтверждённых. Сбой проверки кандидата не
+    убирает: лучше показать находку, чем молча потерять риск."""
+    pos = {b.id: i for i, b in enumerate(ordered)}
+    by_id = {b.id: b for b in ordered}
+
+    def check(cand: FindingCandidate):
+        block = by_id[cand.block_id]
+        messages = verify_prompt(rules[cand.rule_code], cand.quote, _context(block, cand.start, cand.end, ordered, pos),
+                                 section=getattr(block, "section_title", None), subject=subject)
+        try:
+            return llm.chat(messages, LLMVerdict, schema_name="finding_verdict", max_tokens=300)
+        except MLError as exc:
+            log.warning("analysis: второй взгляд недоступен, находка %s остаётся: %s", cand.rule_code, exc)
+            return None
+
+    with ThreadPoolExecutor(max_workers=max(1, min(len(candidates), workers))) as pool:
+        answers = list(pool.map(check, candidates))
+    rejected = set()
+    for cand, answer in zip(candidates, answers, strict=True):
+        if answer is None:
+            continue
+        usage.add(answer.usage)
+        if not answer.data.risk:
+            log.info("analysis: второй взгляд не подтвердил %s: %s | %.80s", cand.rule_code, answer.data.check,
+                     cand.quote)
+            dropped.append(DroppedFinding(rule_code=cand.rule_code, quote=cand.quote, reason="not_confirmed"))
+            rejected.add(id(cand))
+    return rejected
 
 
 def _dedupe(candidates: list[FindingCandidate], dropped: list[DroppedFinding]) -> list[FindingCandidate]:

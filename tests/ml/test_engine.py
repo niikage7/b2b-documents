@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from bench.samples import EXPECTED, SUBJECT, make_contract_docx, make_notice_docx
@@ -12,7 +13,7 @@ from ml.analysis.search import InMemorySearch
 from ml.checklist import load_default_checklist
 from ml.errors import RuleTemplateError, RuleTestTimeoutError, TextTooLongError
 from ml.extract.docx_reader import extract_docx
-from tests.fakes import FakeEmbedder, FakeLLM
+from tests.fakes import FakeEmbedder, FakeLLM, make_client
 
 EMBEDDER = FakeEmbedder()
 
@@ -101,6 +102,64 @@ def test_no_risk_verdict_is_dropped(contract_blocks):
     result = analyze_rule_group(contract_blocks, [r04], llm=fake.client(), window_tokens=10_000)
     assert result.candidates == []
     assert [(d.reason, d.quote) for d in result.dropped] == [("no_risk", quote)]
+
+
+def _verdicts(fake: FakeLLM) -> list[dict]:
+    return [r for r in fake.requests if r.get("response_format", {}).get("json_schema", {}).get("name")
+            == "finding_verdict"]
+
+
+@pytest.fixture
+def verify_all(monkeypatch):
+    """Второй взгляд на всех кандидатов: у подделки LLM уверенность 0,9 — выше порога по умолчанию."""
+    from ml.config import get_settings
+
+    monkeypatch.setenv("LLM_VERIFY_BELOW", "1")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_second_look_drops_unconfirmed(contract_blocks, verify_all):
+    _, rules = load_default_checklist()
+    r04 = next(r for r in rules if r.code == "R-04")
+    keep = "в течение 3 (трёх) календарных дней с даты заключения Контракта"
+    plan = plan_for("contract")
+    other = next(q for q, _ in plan["R-07"])
+    fake = FakeLLM({"R-04": [(keep, "a")], "R-07": [(other, "b")]}, reject=[other])
+    r07 = next(r for r in rules if r.code == "R-07")
+    result = analyze_rule_group(contract_blocks, [r04, r07], llm=fake.client(), window_tokens=100_000)
+    assert [c.rule_code for c in result.candidates] == ["R-04"]
+    assert [(d.rule_code, d.reason) for d in result.dropped] == [("R-07", "not_confirmed")]
+    verdicts = _verdicts(fake)
+    assert len(verdicts) == 2  # по вызову на кандидата
+    prompt = verdicts[0]["messages"][-1]["content"]
+    assert "Проверяемое условие: «" in prompt and "Текст документа" in prompt
+    assert result.usage.calls == 3
+
+
+def test_second_look_failure_keeps_finding(contract_blocks, verify_all):
+    _, rules = load_default_checklist()
+    r04 = next(r for r in rules if r.code == "R-04")
+    quote = "в течение 3 (трёх) календарных дней с даты заключения Контракта"
+    fake = FakeLLM({"R-04": [(quote, "a")]})
+
+    def handler(request):
+        if b"finding_verdict" in request.content:
+            return httpx.Response(400, json={"error": {"message": "bad request"}})
+        return fake.handler(request)
+
+    result = analyze_rule_group(contract_blocks, [r04], llm=make_client(handler), window_tokens=10_000)
+    assert [c.quote for c in result.candidates] == [quote] and result.dropped == []
+
+
+def test_second_look_only_for_doubtful(contract_blocks):
+    _, rules = load_default_checklist()
+    r04 = next(r for r in rules if r.code == "R-04")
+    quote = "в течение 3 (трёх) календарных дней с даты заключения Контракта"
+    fake = FakeLLM({"R-04": [(quote, "a")]}, reject=[quote])  # уверенность подделки 0,9 — выше порога 0,85
+    result = analyze_rule_group(contract_blocks, [r04], llm=fake.client(), window_tokens=10_000)
+    assert len(result.candidates) == 1 and _verdicts(fake) == []
 
 
 def test_long_block_goes_to_llm_as_found_windows():
