@@ -53,6 +53,19 @@ def enqueue_retry(batch_id: str, document_id: str, stage: str, progress: dict, v
     publish_progress(batch_id, progress, view=view)
 
 
+def enqueue_export(scope: str, export_id: str) -> None:
+    """Выгрузка документа или пакета (FR-7.1, FR-8.1): задача в очереди export."""
+    from worker import exports
+
+    task = exports.export_document if scope == "document" else exports.export_batch
+    try:
+        task.delay(export_id)
+    except Exception:
+        log.exception("Выгрузка %s: не удалось поставить задачу в очередь", export_id)
+        return
+    log.info("Выгрузка %s (%s) поставлена в очередь", export_id, scope)
+
+
 def recalc_event(s, recalc: dict) -> tuple[str, dict] | None:
     """Данные `document.done` после правки находки; документ ещё в обработке — событие не нужно.
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, FastAPI
 
 from api.config import get_settings
 from api.errors import install_error_handlers
-from api.routers import auth, batches, documents, rules, system
+from api.routers import auth, batches, documents, exports, rules, system
 
 
 def create_app() -> FastAPI:
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     api.include_router(auth.router)
     api.include_router(batches.router)
     api.include_router(documents.router)
+    api.include_router(exports.router)
     api.include_router(rules.router)
     api.include_router(system.router)
     app.include_router(api)

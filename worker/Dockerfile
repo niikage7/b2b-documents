@@ -16,7 +16,7 @@ COPY storage ./storage
 COPY worker ./worker
 # torch и модель уже в базовом образе: здесь доставляются только SQLAlchemy, Celery и клиент MinIO
 RUN pip install ".[ml,embeddings,pg,db,worker]" \
-    && python -c "import worker.tasks, ml.ocr.pages, ml.structure"
+    && python -c "import worker.tasks, worker.exports, openpyxl, ml.ocr.pages, ml.structure"
 
 RUN useradd --system --uid 10001 --create-home app \
     && mkdir -p "$ML_CACHE_DIR" && chown -R app "$ML_CACHE_DIR"

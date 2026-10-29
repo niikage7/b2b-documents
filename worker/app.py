@@ -25,6 +25,10 @@ ROUTES = {
     "worker.tasks.merge_findings": "analysis",
     "worker.tasks.extract_passport": "analysis",
     "worker.tasks.rule_test": "analysis",
+    "worker.exports.export_document": "export",
+    "worker.exports.export_batch": "export",
+    "worker.exports.export_batch_document": "export",
+    "worker.exports.build_batch_zip": "export",
 }
 
 
@@ -34,7 +38,7 @@ def _redis_url() -> str:
 
 VISIBILITY_TIMEOUT = int(os.environ.get("CELERY_VISIBILITY_TIMEOUT") or 3600)
 
-celery_app = Celery("b2b", include=["worker.tasks"])
+celery_app = Celery("b2b", include=["worker.tasks", "worker.exports"])
 celery_app.conf.update(
     broker_url=os.environ.get("CELERY_BROKER_URL") or _redis_url(),
     # Бэкенд результатов нужен chord: счётчик завершённых задач группы хранится в Redis
