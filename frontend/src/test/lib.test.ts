@@ -5,6 +5,9 @@ import { buildSegments, findMatches } from '../lib/segments';
 import { selectionToBlock } from '../lib/selection';
 import { sectionLabel } from '../pages/document/FindingCard';
 import { safeNext } from '../pages/LoginPage';
+import type { DocumentCard } from '../api/types';
+import { findingLink, sortDocuments } from '../pages/BatchPage';
+import { isBatchRunning, lowQualityNote } from '../pages/ProcessingPage';
 
 describe('buildSegments', () => {
   const text = 'Поставка Товара осуществляется в течение 3 (трёх) календарных дней.';
@@ -177,5 +180,53 @@ describe('safeNext', () => {
     expect(safeNext(null)).toBe('/batches');
     expect(safeNext('')).toBe('/batches');
     expect(safeNext('batches')).toBe('/batches');
+  });
+});
+
+describe('sortDocuments', () => {
+  it('сортирует документы по уровню: сначала critical, затем warning, ok, ошибки в конце', () => {
+    const docs = [
+      { id: '1', filename: 'б_ok.docx', worst_level: 'ok' as const, status: 'done' as const },
+      { id: '2', filename: 'а_critical.pdf', worst_level: 'critical' as const, status: 'done' as const },
+      { id: '3', filename: 'в_warning.docx', worst_level: 'warning' as const, status: 'done' as const },
+      { id: '4', filename: 'г_err.pdf', worst_level: null, status: 'error' as const },
+      { id: '5', filename: 'б_critical.docx', worst_level: 'critical' as const, status: 'done' as const },
+    ] as DocumentCard[];
+
+    const sorted = sortDocuments(docs);
+    expect(sorted.map((d) => d.id)).toEqual(['2', '5', '3', '1', '4']);
+  });
+});
+
+describe('lowQualityNote', () => {
+  it('возвращает null для пустого списка страниц', () => {
+    expect(lowQualityNote([])).toBeNull();
+  });
+
+  it('склоняет страницы распознавания с низким качеством', () => {
+    expect(lowQualityNote([1])).toBe('1 страница распознана с низким качеством');
+    expect(lowQualityNote([1, 2])).toBe('2 страницы распознаны с низким качеством');
+    expect(lowQualityNote([1, 2, 3, 4, 5])).toBe('5 страниц распознано с низким качеством');
+  });
+});
+
+describe('isBatchRunning', () => {
+  it('определяет статус обработки пакета', () => {
+    expect(isBatchRunning(undefined)).toBe(false);
+    expect(isBatchRunning({ status: 'done', documents: [] })).toBe(false);
+    expect(isBatchRunning({ status: 'queued', documents: [] })).toBe(true);
+    expect(isBatchRunning({ status: 'processing', documents: [] })).toBe(true);
+    expect(
+      isBatchRunning({
+        status: 'done',
+        documents: [{ status: 'processing' }] as DocumentCard[],
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('findingLink', () => {
+  it('формирует ссылку на документ с параметром finding', () => {
+    expect(findingLink('doc-123', 'f-456')).toBe('/documents/doc-123?finding=f-456');
   });
 });

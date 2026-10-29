@@ -118,6 +118,12 @@ export function BatchesPage() {
             aria-label="Поиск по названию пакета или файла"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setSearchInput('');
+                (e.target as HTMLElement).blur();
+              }
+            }}
           />
         </label>
         <Segmented label="Статус" value={params.status} options={STATUS_OPTIONS} onChange={(status) => update({ status })} />

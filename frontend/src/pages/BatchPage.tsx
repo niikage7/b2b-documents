@@ -26,6 +26,23 @@ export function findingLink(documentId: string, findingId: string) {
   return `/documents/${documentId}?finding=${findingId}`;
 }
 
+export function sortDocuments(docs: DocumentCard[]): DocumentCard[] {
+  const LEVEL_ORDER: Record<string, number> = {
+    critical: 0,
+    warning: 1,
+    ok: 2,
+    not_checked: 3,
+  };
+  return [...docs].sort((a, b) => {
+    if (a.status === 'error' && b.status !== 'error') return 1;
+    if (a.status !== 'error' && b.status === 'error') return -1;
+    const orderA = a.worst_level ? LEVEL_ORDER[a.worst_level] ?? 99 : 99;
+    const orderB = b.worst_level ? LEVEL_ORDER[b.worst_level] ?? 99 : 99;
+    if (orderA !== orderB) return orderA - orderB;
+    return a.filename.localeCompare(b.filename, 'ru');
+  });
+}
+
 function CounterCards({ batch, filter, onChange }: { batch: BatchView; filter: DocFilter; onChange: (f: DocFilter) => void }) {
   const c = batch.counters ?? { total: batch.documents.length, ok: 0, warning: 0, critical: 0, errors: 0 };
   const cards: { key: DocFilter; label: string; value: number; tone?: 'ok' | 'warning' | 'critical' }[] = [
@@ -361,7 +378,8 @@ export function BatchPage() {
     );
   }
 
-  const docs = batch.documents.filter((d) => matchesFilter(d, filter));
+  const sortedDocs = sortDocuments(batch.documents);
+  const docs = sortedDocs.filter((d) => matchesFilter(d, filter));
   const review = batch.review ?? { checked: 0, total: 0 };
   const findingsTotal = (batch.findings?.critical ?? 0) + (batch.findings?.warning ?? 0);
   const passport = batch.meta?.passport?.fields ?? [];

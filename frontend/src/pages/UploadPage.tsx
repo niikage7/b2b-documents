@@ -73,11 +73,12 @@ export function UploadPage() {
     if (!profileId && profiles.data?.length) setProfileId((profiles.data.find((p) => p.is_default) ?? profiles.data[0]).id);
   }, [profiles.data, profileId]);
 
-  // Название по умолчанию — из имени первого архива, иначе по дате
+  // Название по умолчанию — из имени первого архива, иначе имя единственного файла, иначе по дате
   useEffect(() => {
     if (nameTouched) return;
     const zip = files.find((f) => fileExtension(f.filename) === 'zip');
     if (zip) setName(zip.filename.replace(/\.zip$/i, ''));
+    else if (files.length === 1) setName(files[0].filename.replace(/\.[^/.]+$/, ''));
     else if (files.length && !name) setName(`Пакет от ${formatDate(new Date().toISOString())}`);
   }, [files, nameTouched, name]);
 
@@ -102,8 +103,12 @@ export function UploadPage() {
   const addFiles = async (list: FileList | File[]) => {
     const picked = [...list].filter((f) => f.size >= 0);
     if (!picked.length) return;
-    const id = ++seq.current;
     const total = picked.reduce((s, f) => s + f.size, 0);
+    if (totalBytes + total > maxBytes) {
+      toast.show(`Пакет превысит ${formatMegabytes(maxBytes)} МБ. Уберите лишние файлы или разделите пакет`, { tone: 'error' });
+      return;
+    }
+    const id = ++seq.current;
     setPending((p) => [...p, { id, files: picked, loaded: 0, total }]);
     setStartError(null);
     try {

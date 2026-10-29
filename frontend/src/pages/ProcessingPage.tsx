@@ -29,6 +29,7 @@ export function useRetryDocument(batchId: string) {
   const qc = useQueryClient();
   const toast = useToast();
   const [pending, setPending] = useState<Set<string>>(new Set());
+
   const retry = async (documentId: string) => {
     setPending((s) => new Set(s).add(documentId));
     try {
@@ -53,7 +54,39 @@ export function useRetryDocument(batchId: string) {
       });
     }
   };
-  return { retry, isPending: (id: string) => pending.has(id) };
+
+  const retryAll = async (documentIds: string[]) => {
+    setPending((s) => {
+      const next = new Set(s);
+      documentIds.forEach((id) => next.add(id));
+      return next;
+    });
+    try {
+      await Promise.all(documentIds.map((id) => api.retryDocument(id)));
+      qc.setQueryData<BatchView>(keys.batch(batchId), (v) =>
+        v && {
+          ...v,
+          status: 'processing',
+          documents: v.documents.map((d) =>
+            documentIds.includes(d.id)
+              ? { ...d, status: 'queued', stage: 'queued', stage_label: 'В очереди', progress: 0, error: null, worst_level: null }
+              : d,
+          ),
+        },
+      );
+      toast.show(`${countLabel(documentIds.length, ['Документ отправлен', 'Документа отправлены', 'Документов отправлено'])} на повторную обработку`);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      setPending((s) => {
+        const next = new Set(s);
+        documentIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  };
+
+  return { retry, retryAll, isPending: (id: string) => pending.has(id) };
 }
 
 function StageCell({ doc }: { doc: DocumentCard }) {
@@ -87,7 +120,7 @@ export function ProcessingPage() {
   const batch = query.data;
   const running = isBatchRunning(batch);
   const connected = useBatchEvents(batchId, running);
-  const { retry, isPending } = useRetryDocument(batchId);
+  const { retry, retryAll, isPending } = useRetryDocument(batchId);
 
   if (batch?.status === 'draft') return <Navigate to={`/upload?draft=${batch.id}`} replace />;
 
@@ -101,6 +134,7 @@ export function ProcessingPage() {
 
   const progress = batch?.progress;
   const readyCount = batch?.documents.filter((d) => d.status === 'done').length ?? 0;
+  const failedDocs = batch?.documents.filter((d) => d.status === 'error') ?? [];
   const eta = formatEta(batch?.eta_seconds);
   const counters = batch?.counters;
 
@@ -122,7 +156,7 @@ export function ProcessingPage() {
           )}
         </div>
         <div className="page__actions">
-          <Button variant="primary" size="lg" disabled={!readyCount} onClick={() => navigate(`/batches/${batchId}`)}>
+          <Button variant="primary" size="lg" disabled={!readyCount && running} onClick={() => navigate(`/batches/${batchId}`)}>
             Перейти к разбору <ArrowRight size={18} />
           </Button>
         </div>
@@ -156,6 +190,18 @@ export function ProcessingPage() {
       <section className="card section-gap">
         <div className="card__header">
           <h2>Документы пакета</h2>
+          {failedDocs.length > 1 && (
+            <>
+              <div className="spacer" />
+              <Button
+                size="sm"
+                onClick={() => void retryAll(failedDocs.map((d) => d.id))}
+                loading={failedDocs.some((d) => isPending(d.id))}
+              >
+                <RotateCw size={14} /> Повторить все с ошибкой ({failedDocs.length})
+              </Button>
+            </>
+          )}
         </div>
         {!batch ? (
           <ListSkeleton rows={4} />
