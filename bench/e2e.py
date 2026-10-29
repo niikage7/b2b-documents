@@ -3,7 +3,7 @@
 В отличие от `bench.pipeline`, который зовёт функции ML напрямую, здесь работают те же задачи, что
 в воркере (`worker.tasks`), с настоящими PostgreSQL, эмбеддингами и LLM. Celery — в режиме eager:
 задачи идут по очереди в одном процессе, поэтому время — верхняя оценка, в воркерах документы и
-группы правил идут параллельно. Хранилище — в памяти процесса вместо MinIO. Для каждого прогона
+группы правил идут параллельно. Хранилище и события — в памяти процесса вместо MinIO и Redis. Для каждого прогона
 создаётся своя база (миграции Alembic), в конце она удаляется.
 
     TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres \\
@@ -160,9 +160,12 @@ def run(args, url: str) -> None:
     from db.models import Batch, Document, Finding
     from storage import MemoryStorage
     from worker import runtime, tasks
+    from worker.events import MemoryEventBus
 
     memory = MemoryStorage()
     runtime.get_storage = lambda: memory
+    bus = MemoryEventBus()  # события SSE — в памяти процесса, как в тестах конвейера: Redis не нужен
+    runtime.get_events = lambda: bus
     eager_celery()
 
     batch_id = start_batch(args.files, name="Сквозной прогон")
