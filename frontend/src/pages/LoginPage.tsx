@@ -1,5 +1,5 @@
 import { Eye, EyeOff, Info } from 'lucide-react';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/endpoints';
 import { ApiError, MOCK_API } from '../api/http';
@@ -9,9 +9,9 @@ import { errorMessage } from '../components/feedback';
 import { Button, Field } from '../components/ui';
 import { countLabel } from '../lib/format';
 
-function safeNext(next: string | null): string {
+export function safeNext(next: string | null): string {
   // Возврат только на свои страницы: не уводим на внешний адрес из параметра
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/batches';
+  return next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/batches';
 }
 
 export function LoginPage() {
@@ -23,6 +23,22 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryAfter, setRetryAfter] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!retryAfter || retryAfter <= 0) return;
+    const timer = setInterval(() => {
+      setRetryAfter((prev) => {
+        if (!prev || prev <= 1) {
+          setError(null);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [retryAfter]);
+
   const expired = params.get('expired') === '1';
   const next = safeNext(params.get('next'));
 
@@ -30,7 +46,7 @@ export function LoginPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!login.trim() || !password) return;
+    if (!login.trim() || !password || (retryAfter !== null && retryAfter > 0)) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -38,8 +54,9 @@ export function LoginPage() {
       signIn(user);
       navigate(next, { replace: true });
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'too_many_attempts') {
-        const seconds = Number(err.details.retry_after_seconds ?? 300);
+      if (err instanceof ApiError && (err.code === 'too_many_attempts' || err.status === 429)) {
+        const seconds = Number(err.details?.retry_after_seconds ?? 300);
+        setRetryAfter(seconds);
         setError(`Слишком много попыток входа. Попробуйте через ${countLabel(Math.max(1, Math.ceil(seconds / 60)), ['минуту', 'минуты', 'минут'])}`);
       } else {
         setError(errorMessage(err));
@@ -114,11 +131,19 @@ export function LoginPage() {
           </Field>
           {error && (
             <div className="field__error login__error" role="alert">
-              {error}
+              {retryAfter && retryAfter > 0
+                ? `Слишком много попыток входа. Попробуйте через ${Math.floor(retryAfter / 60)}:${String(retryAfter % 60).padStart(2, '0')}`
+                : error}
             </div>
           )}
           <div>
-            <Button type="submit" variant="primary" size="lg" loading={submitting} disabled={!login.trim() || !password}>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={submitting}
+              disabled={!login.trim() || !password || (retryAfter !== null && retryAfter > 0)}
+            >
               Войти
             </Button>
           </div>
@@ -127,7 +152,46 @@ export function LoginPage() {
             <div className="note login__demo">
               <Info size={16} />
               <div>
-                Демо-режим без бэкенда. Логины: <b>methodologist</b>, <b>lawyer</b>, <b>specialist</b>; пароль — <b>demo</b>.{' '}
+                Демо-режим без бэкенда. Быстрый вход:{' '}
+                <button
+                  type="button"
+                  className="btn btn--link"
+                  style={{ textDecoration: 'underline' }}
+                  onClick={() => {
+                    setLogin('methodologist');
+                    setPassword('demo');
+                    setError(null);
+                  }}
+                >
+                  <b>methodologist</b>
+                </button>
+                ,{' '}
+                <button
+                  type="button"
+                  className="btn btn--link"
+                  style={{ textDecoration: 'underline' }}
+                  onClick={() => {
+                    setLogin('lawyer');
+                    setPassword('demo');
+                    setError(null);
+                  }}
+                >
+                  <b>lawyer</b>
+                </button>
+                ,{' '}
+                <button
+                  type="button"
+                  className="btn btn--link"
+                  style={{ textDecoration: 'underline' }}
+                  onClick={() => {
+                    setLogin('specialist');
+                    setPassword('demo');
+                    setError(null);
+                  }}
+                >
+                  <b>specialist</b>
+                </button>
+                ; пароль — <b>demo</b>.{' '}
                 <button type="button" className="btn btn--link" onClick={() => (window as unknown as { __resetMockApi?: () => void }).__resetMockApi?.()}>
                   Сбросить демо-данные
                 </button>

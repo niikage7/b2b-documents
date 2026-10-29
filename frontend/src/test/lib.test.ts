@@ -1,9 +1,10 @@
 import { layoutCallouts } from '../lib/calloutLayout';
 import { countLabel, formatEta, formatWhen } from '../lib/format';
-import { sectionLabel } from '../pages/document/FindingCard';
 import { validateRule } from '../lib/ruleValidation';
 import { buildSegments, findMatches } from '../lib/segments';
 import { selectionToBlock } from '../lib/selection';
+import { sectionLabel } from '../pages/document/FindingCard';
+import { safeNext } from '../pages/LoginPage';
 
 describe('buildSegments', () => {
   const text = 'Поставка Товара осуществляется в течение 3 (трёх) календарных дней.';
@@ -98,8 +99,13 @@ describe('layoutCallouts', () => {
 
 describe('validateRule', () => {
   const base = {
-    code: 'R-04', title: 'Срок', description: 'Описание', level: 'critical' as const, kind: 'semantic_llm' as const,
-    prompt_template: 'Проверь {фрагмент}: срок меньше {порог} дней', variables: [{ name: 'порог', type: 'number' as const, value: '10' }],
+    code: 'R-04',
+    title: 'Срок',
+    description: 'Описание',
+    level: 'critical' as const,
+    kind: 'semantic_llm' as const,
+    prompt_template: 'Проверь {фрагмент}: срок меньше {порог} дней',
+    variables: [{ name: 'порог', type: 'number' as const, value: '10' }],
   };
 
   it('принимает корректное правило', () => {
@@ -149,5 +155,27 @@ describe('sectionLabel', () => {
 
   it('отдаёт дефолт при отсутствии данных', () => {
     expect(sectionLabel({ section_number: null, section_title: null, page: null })).toBe('раздел не определён');
+  });
+});
+
+describe('safeNext', () => {
+  it('возвращает безопасные внутренние пути без изменений', () => {
+    expect(safeNext('/batches')).toBe('/batches');
+    expect(safeNext('/batches/b1')).toBe('/batches/b1');
+    expect(safeNext('/documents/d1?page=2')).toBe('/documents/d1?page=2');
+  });
+
+  it('защищает от open redirect и внешних ссылок', () => {
+    expect(safeNext('https://evil.com')).toBe('/batches');
+    expect(safeNext('http://attacker.org/hack')).toBe('/batches');
+    expect(safeNext('//evil.com')).toBe('/batches');
+    expect(safeNext('/\\evil.com')).toBe('/batches');
+    expect(safeNext('javascript:alert(1)')).toBe('/batches');
+  });
+
+  it('возвращает /batches при пустом или null параметре', () => {
+    expect(safeNext(null)).toBe('/batches');
+    expect(safeNext('')).toBe('/batches');
+    expect(safeNext('batches')).toBe('/batches');
   });
 });
