@@ -83,6 +83,7 @@ def test_document_export_pdf(s, env, author, fake_llm, fonts):
 
 def test_batch_export_zip_keeps_archive_structure_and_summary(s, env, author, fake_llm, contract, notice):  # noqa: F811
     fake_llm.plan = risk_plan("contract") | risk_plan("notice")
+    fake_llm.passport = {"nmck": ("4 850 000,00 руб.", "4 850 000,00")}  # паспорт в сводке — форма {"fields": [...]}
     archive = zip_bytes({"Закупка/Контракт.docx": contract, "Закупка/Приложения/Извещение.docx": notice,
                          "Закупка/битый.pdf": b"%PDF-1.4 broken"})
     batch_id = make_batch(s, env, author, [("пакет.zip", archive), ("Письмо.docx", notice)], name="Бумага")
@@ -106,6 +107,7 @@ def test_batch_export_zip_keeps_archive_structure_and_summary(s, env, author, fa
     assert wb.sheetnames == ["Итоги", "Документы", "Находки"]
     totals = {r[0]: r[1] for r in wb["Итоги"].iter_rows(values_only=True)}
     assert totals["Пакет"] == "Бумага" and totals["Документов"] == 4 and totals["Документов с ошибкой"] == 1
+    assert totals["НМЦК"] == "4 850 000,00 руб."
     assert "Примечание" not in totals
     findings_count = s.query(Finding).filter(Finding.batch_id == export.target_id).count()
     assert wb["Находки"].max_row - 1 == findings_count

@@ -175,7 +175,7 @@ def test_summary_xlsx_sheets(tmp_path):
     summary = {
         "totals": {"name": "Закупка", "subject": "Поставка бумаги", "profile": "44-ФЗ", "author": "Тест",
                    "created_at": "2026-10-29T10:00:00+00:00", "worst_level": "Критично",
-                   "meta": {"passport": [{"key": "nmck", "label": "НМЦК", "value": "4 850 000,00 руб."}]},
+                   "meta": {"passport": {"fields": [{"key": "nmck", "label": "НМЦК", "value": "4 850 000,00 руб."}]}},
                    "counters": {"total": 2, "ok": 0, "warning": 1, "critical": 1, "errors": 0},
                    "review": {"checked": 1, "total": 3}, "findings": {"critical": 2, "warning": 1}},
         "documents": [{"filename": "Контракт.docx", "original_path": "docs/Контракт.docx", "pages": 3,

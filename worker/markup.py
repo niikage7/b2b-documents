@@ -409,7 +409,9 @@ def summary_xlsx(summary: dict, out: str | Path, *, notes: Iterable[str] = ()) -
         ("Находок «Внимание»", found.get("warning", 0)),
         ("Проверено юристом", f"{review.get('checked', 0)} из {review.get('total', 0)}"),
     ]
-    passport = (totals.get("meta") or {}).get("passport") or []
+    from db.exports import passport_fields
+
+    passport = passport_fields(totals.get("meta"))  # {"fields": [...]}; список — пакеты до 29.10
     if passport:
         items.append(("", ""))
         items.append(("Паспорт закупки", ""))
