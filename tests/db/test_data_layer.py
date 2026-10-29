@@ -274,8 +274,14 @@ def test_batch_passport(s, world):
                             "document_id": str(world["doc"].id), "block_id": world["blocks"][5].id, "start": 0,
                             "end": 5}]}
     event = pipeline.set_batch_passport(s, world["batch_id"], passport)
-    assert event["meta"]["passport"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
-    assert batches.batch_view(s, world["batch_id"])["meta"]["passport"][0]["key"] == "nmck"
+    assert event["meta"]["passport"]["fields"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
+    assert batches.batch_view(s, world["batch_id"])["meta"]["passport"]["fields"][0]["key"] == "nmck"
+    # Запрос о разъяснениях берёт заказчика и номер закупки из паспорта
+    pipeline.set_batch_passport(s, world["batch_id"], {"fields": [
+        {"key": "customer", "label": "Заказчик", "value": "ГКУ «Заказчик»"},
+        {"key": "number", "label": "Номер закупки", "value": "0338200009926000090"}]})
+    data = exports.clarification_input(s, world["batch_id"])
+    assert (data["customer"], data["procurement_number"]) == ("ГКУ «Заказчик»", "0338200009926000090")
 
 
 def test_clarification_input(s, world):

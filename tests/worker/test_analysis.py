@@ -86,7 +86,7 @@ def test_batch_gets_findings_colors_subject_and_passport(s, env, author, fake_ll
     assert view["subject"] == samples.SUBJECT
     assert "batch_meta" not in schema_names(fake_llm)
     assert schema_names(fake_llm).count("procurement_passport") == 1
-    assert [f["key"] for f in view["meta"]["passport"]] == ["nmck"]
+    assert [f["key"] for f in view["meta"]["passport"]["fields"]] == ["nmck"]
 
     # Группы правил: 7 правил поиска по 4 и одно правило «Проверка ИИ» — у каждого документа свои вызовы
     run = stages(s, batch_id)

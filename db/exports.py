@@ -81,6 +81,12 @@ def export_view(s: Session, export_id) -> dict:
 # --- Запрос о даче разъяснений ---------------------------------------------------------------
 
 
+def passport_fields(meta: dict | None) -> list[dict]:
+    """Поля паспорта из `batch.meta`; список без обёртки — форма пакетов, обработанных до 29.10."""
+    passport = (meta or {}).get("passport") or {}
+    return passport if isinstance(passport, list) else passport.get("fields", [])
+
+
 def clarification_input(s: Session, batch_id, *, finding_ids=None) -> dict:
     """Вход `ml.draft_clarification`: находки пакета (выбранные или все активные) и данные закупки.
 
@@ -102,7 +108,7 @@ def clarification_input(s: Session, batch_id, *, finding_ids=None) -> dict:
         items.append(item | {"filename": doc.filename if doc else None,
                              "_order": (doc.original_path if doc else "", item["order"] or 0, f.start)})
     items.sort(key=lambda x: x.pop("_order"))
-    passport = {p["key"]: p["value"] for p in (batch.meta or {}).get("passport", [])}
+    passport = {p["key"]: p["value"] for p in passport_fields(batch.meta)}
     profile = s.get(RuleProfile, batch.profile_id)
     law = "223" if profile and "223" in f"{profile.name} {profile.short_name}" else "44"
     return {"findings": items, "subject": batch.subject or passport.get("subject"),
