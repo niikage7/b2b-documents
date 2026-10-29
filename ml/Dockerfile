@@ -2,6 +2,10 @@
 # шрифты и веса модели эмбеддингов. Итоговые замеры OCR делаются внутри этого образа:
 # версия Tesseract меняет результат при тех же моделях.
 #
+# OMP_THREAD_LIMIT=1 здесь не задаётся: Tesseract получает его в своём подпроцессе
+# (ml/ocr/tesseract.py), а глобально он ограничил бы torch одним потоком — эмбеддинги в
+# контейнере шли в 4,6 раза медленнее (замер 29.10: 256 фрагментов за 31,6 с вместо 6,9 с).
+#
 # Сборка из корня репозитория:
 #   docker build -f ml/Dockerfile -t b2b-ml .
 #   docker build -f ml/Dockerfile --build-arg EMBEDDING_MODEL=deepvk/USER-bge-m3 -t b2b-ml .
@@ -10,7 +14,6 @@ FROM python:3.12-slim-trixie
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    OMP_THREAD_LIMIT=1 \
     HF_HOME=/opt/hf \
     ML_CACHE_DIR=/var/cache/b2b-ml
 
