@@ -34,7 +34,20 @@ def no_broker(monkeypatch):
     calls: list[tuple] = []
     monkeypatch.setattr(tasks, "process_batch", lambda batch_id: calls.append(("batch", batch_id)))
     monkeypatch.setattr(tasks, "rerun_batch", lambda batch_id, ids: calls.append(("rerun", batch_id, list(ids))))
+    monkeypatch.setattr(tasks, "retry_document",
+                        lambda batch_id, document_id, stage: calls.append(("retry", batch_id, document_id, stage)))
     return calls
+
+
+@pytest.fixture(autouse=True)
+def bus(monkeypatch):
+    """События пакетов без Redis: шина в памяти, тест читает опубликованное из неё."""
+    from worker import runtime
+    from worker.events import MemoryEventBus
+
+    memory = MemoryEventBus()
+    monkeypatch.setattr(runtime, "get_events", lambda: memory)
+    return memory
 
 
 @pytest.fixture

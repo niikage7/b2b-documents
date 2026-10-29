@@ -7,7 +7,6 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-from api import hooks
 from contracts.analysis import FindingCandidate, RuleGroupResult
 from contracts.document import Block
 from db import batches, pipeline
@@ -25,10 +24,9 @@ def _block(doc_id: str, order: int, kind: str, text_: str, *, number: str | None
 
 
 @pytest.fixture
-def published(monkeypatch):
-    calls: list[dict] = []
-    monkeypatch.setattr(hooks, "publish_recalc", lambda recalc: calls.append(recalc))
-    return calls
+def published(bus, world):
+    """События `document.done`, которые API опубликовал в шину пакета после правки находки."""
+    return lambda: [data for _, type_, data in bus.events(world["batch_id"]) if type_ == "document.done"]
 
 
 @pytest.fixture
@@ -133,7 +131,10 @@ def test_review_accept_reject_and_recalc(world, client, published):
     assert body["document"]["worst_level"] == "warning"  # отклонённая находка в расчёт не идёт
     assert body["document"]["review"] == {"checked": 1, "total": 2}
     assert body["batch"]["counters"]["warning"] == 1
-    assert len(published) == 1 and published[0]["document"]["id"] == world["doc_id"]
+    [event] = published()
+    assert event["document_id"] == world["doc_id"] and event["worst_level"] == "warning"
+    assert event["findings"] == {"critical": 0, "warning": 1} and event["review"] == {"checked": 1, "total": 2}
+    assert event["pages"] is None and event["ocr_low_quality_pages"] == []
 
     r = client.patch(f"/api/findings/{warning['id']}", json={"version": warning["version"], "status": "accepted"})
     assert r.json()["document"]["review"] == {"checked": 2, "total": 2}
@@ -190,7 +191,7 @@ def test_manual_finding_lifecycle(world, client, published):
     r = client.delete(f"/api/findings/{f['id']}")
     assert r.status_code == 200 and r.json()["document"]["id"] == world["doc_id"]
     assert len(_findings(client, world["doc_id"])) == 2
-    assert len(published) == 2
+    assert len(published()) == 2
     assert client.delete(f"/api/findings/{f['id']}").status_code == 404
 
 

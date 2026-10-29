@@ -32,6 +32,8 @@ def _redis_url() -> str:
     return os.environ.get("REDIS_URL") or "redis://localhost:6379/0"
 
 
+VISIBILITY_TIMEOUT = int(os.environ.get("CELERY_VISIBILITY_TIMEOUT") or 3600)
+
 celery_app = Celery("b2b", include=["worker.tasks"])
 celery_app.conf.update(
     broker_url=os.environ.get("CELERY_BROKER_URL") or _redis_url(),
@@ -49,9 +51,15 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     # Длинная задача (OCR группы страниц) не держит в запасе чужие задачи
     worker_prefetch_multiplier=1,
-    # Redis вернёт неподтверждённую задачу в очередь через час: дольше не работает ни одна задача
-    broker_transport_options={"visibility_timeout": 3600},
-    result_backend_transport_options={"visibility_timeout": 3600},
+    # Воркер убит без остановки: Redis вернёт неподтверждённую задачу в очередь через час — дольше
+    # не работает ни одна задача, иначе её выполнили бы дважды
+    broker_transport_options={"visibility_timeout": VISIBILITY_TIMEOUT},
+    result_backend_transport_options={"visibility_timeout": VISIBILITY_TIMEOUT},
+    # Остановка воркера (FR-2.3): по SIGQUIT (в compose — stop_signal) задачам даётся столько секунд,
+    # затем незаконченные отменяются и возвращаются в очередь — их доделает этот же воркер после запуска
+    # или другой воркер очереди; без этого `docker compose stop` ждал бы долгую задачу или убивал её.
+    # REMAP_SIGTERM=SIGQUIT не использовать: процессы пула тогда игнорируют сигнал отмены задачи
+    worker_soft_shutdown_timeout=float(os.environ.get("WORKER_SOFT_SHUTDOWN_SECONDS") or 20),
     broker_connection_retry_on_startup=True,
     task_track_started=True,
     # Модель эмбеддингов и кеш LibreOffice держат память: процесс пула перезапускается время от времени

@@ -9,15 +9,17 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
-from api import hooks, uploads
+from api import hooks, sse, uploads
 from api.deps import CurrentUser, DbSession, SettingsDep, StorageDep
 from db import batches, documents
 from db.batches import BatchTooLarge
 from db.errors import Conflict, ValidationFailed
 from db.models import UploadedFile
+from worker import runtime
 
 router = APIRouter(tags=["batches"])
 
@@ -135,6 +137,24 @@ def start_batch(batch_id: uuid.UUID, body: StartIn, user: CurrentUser, s: DbSess
 @router.get("/batches/{batch_id}")
 def get_batch(batch_id: uuid.UUID, user: CurrentUser, s: DbSession) -> dict:
     return batches.batch_view(s, batch_id)
+
+
+@router.get("/batches/{batch_id}/events", response_class=StreamingResponse,
+            responses={200: {"content": {"text/event-stream": {}},
+                             "description": "Поток событий SSE: batch.snapshot, batch.progress, batch.meta, "
+                                            "document.progress, document.done, document.error, batch.done, "
+                                            "export.done"}})
+def batch_events(batch_id: uuid.UUID, request: Request, user: CurrentUser, s: DbSession,
+                 settings: SettingsDep) -> StreamingResponse:
+    """Прогресс пакета в реальном времени (FR-2.2). У событий есть `id:`; после обрыва браузер
+    присылает `Last-Event-ID` и получает пропущенное, иначе первым идёт `batch.snapshot`.
+    """
+    bus = runtime.get_events()
+    begin = sse.start(s, bus, str(batch_id), request.headers.get("last-event-id"))
+    return StreamingResponse(
+        sse.stream(bus, str(batch_id), begin, heartbeat=settings.sse_heartbeat_seconds,
+                   max_seconds=settings.sse_max_seconds),
+        media_type="text/event-stream", headers=sse.HEADERS)
 
 
 class BatchPatch(BaseModel):

@@ -40,6 +40,14 @@ x-worker-env: &worker-env
   LLM_CACHE: ${LLM_CACHE:-1}
   RULES_PER_GROUP: ${RULES_PER_GROUP:-4}
   TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
+  # Повторы временных ошибок этапа: всего попыток и база экспоненциальной паузы, с
+  TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-3}
+  TASK_RETRY_BASE_SECONDS: ${TASK_RETRY_BASE_SECONDS:-5}
+  # Остановка воркера (docker compose stop/restart, stop_signal SIGQUIT): задачам даётся
+  # WORKER_SOFT_SHUTDOWN_SECONDS, незаконченные возвращаются в очередь и доделываются после запуска
+  WORKER_SOFT_SHUTDOWN_SECONDS: ${WORKER_SOFT_SHUTDOWN_SECONDS:-20}
+  # Если воркер убит без остановки (SIGKILL, сбой хоста), Redis вернёт задачу в очередь через столько секунд
+  CELERY_VISIBILITY_TIMEOUT: ${CELERY_VISIBILITY_TIMEOUT:-3600}
 
 x-worker: &worker
   build:
@@ -61,6 +69,13 @@ x-worker: &worker
     api:
       condition: service_healthy
   restart: unless-stopped
+  # SIGQUIT — «холодная» остановка Celery с мягким периодом: после WORKER_SOFT_SHUTDOWN_SECONDS
+  # незаконченные задачи отменяются и сразу возвращаются в очередь. SIGTERM дал бы «тёплую» остановку:
+  # Celery ждал бы конца задачи, Docker убил бы его, и задача вернулась бы только через visibility_timeout.
+  # REMAP_SIGTERM=SIGQUIT не подходит: процессы пула игнорируют SIGQUIT и отмена задачи не срабатывает
+  stop_signal: SIGQUIT
+  # Больше WORKER_SOFT_SHUTDOWN_SECONDS: Docker не добивает воркер, пока тот возвращает задачи в очередь
+  stop_grace_period: 45s
 
 services:
   db:

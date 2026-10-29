@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 
 from api import hooks
 from api.deps import CurrentUser, DbSession
-from db import documents, findings
+from db import batches, documents, findings, pipeline
+from db.errors import Conflict, NotFound
+from db.models import Batch, Document
 
 router = APIRouter(tags=["documents"])
 
@@ -51,6 +53,30 @@ def search_document(document_id: uuid.UUID, user: CurrentUser, s: DbSession,
     return documents.search_document(s, document_id, q)
 
 
+@router.post("/documents/{document_id}/retry", status_code=202)
+def retry_document(document_id: uuid.UUID, user: CurrentUser, s: DbSession, background: BackgroundTasks) -> None:
+    """Повтор упавшего документа с этапа, на котором он упал (FR-2.3); пакет снова «в работе».
+
+    409 `conflict` — документ не в статусе «Ошибка» или это архив, который не распаковался.
+    """
+    doc = s.get(Document, document_id)
+    if doc is None:
+        raise NotFound("Документ не найден")
+    if doc.kind == "zip":
+        # Архив сверх лимита или битый: тот же файл упадёт так же, нужен исправленный пакет
+        raise Conflict("Архив не распаковался — исправьте его и загрузите в новый пакет")
+    from worker.tasks import restart_stage
+
+    stage = restart_stage(s, document_id)
+    documents.retry_document(s, document_id)  # 409, если документ не в ошибке
+    progress = pipeline.set_stage(s, document_id, "queued", progress=0)
+    batch = s.get(Batch, doc.batch_id)
+    batch.status, batch.finished_at = "processing", None
+    s.flush()
+    view = batches.batch_view(s, doc.batch_id)
+    background.add_task(hooks.enqueue_retry, str(doc.batch_id), str(document_id), stage, progress, view)
+
+
 class FindingPatch(BaseModel):
     version: int
     status: Literal["new", "accepted", "rejected", "edited"] | None = None
@@ -69,7 +95,7 @@ def update_finding(finding_id: uuid.UUID, body: FindingPatch, user: CurrentUser,
     """
     result = findings.update_finding(s, finding_id, actor_id=user.id, version=body.version, status=body.status,
                                      level=body.level, explanation=body.explanation, comment=body.comment)
-    background.add_task(hooks.publish_recalc, result)
+    background.add_task(hooks.publish_recalc, hooks.recalc_event(s, result))
     return result
 
 
@@ -87,7 +113,7 @@ def create_finding(document_id: uuid.UUID, body: NewFinding, user: CurrentUser, 
     """Ручная пометка: выделение внутри одного блока, сразу принята."""
     result = findings.create_user_finding(s, document_id, actor_id=user.id, block_id=body.block_id, start=body.start,
                                           end=body.end, level=body.level, comment=body.comment)
-    background.add_task(hooks.publish_recalc, result)
+    background.add_task(hooks.publish_recalc, hooks.recalc_event(s, result))
     return result
 
 
@@ -95,7 +121,7 @@ def create_finding(document_id: uuid.UUID, body: NewFinding, user: CurrentUser, 
 def delete_finding(finding_id: uuid.UUID, user: CurrentUser, s: DbSession, background: BackgroundTasks) -> dict:
     """Удаление своей ручной пометки; в ответе пересчёт цвета и счётчиков."""
     result = findings.delete_user_finding(s, finding_id, actor_id=user.id)
-    background.add_task(hooks.publish_recalc, result)
+    background.add_task(hooks.publish_recalc, hooks.recalc_event(s, result))
     return result
 
 

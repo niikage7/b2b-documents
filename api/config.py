@@ -49,6 +49,11 @@ class Settings:
     max_batch_bytes: int = MAX_BATCH_BYTES
     allowed_extensions: tuple[str, ...] = tuple(ALLOWED_EXTENSIONS)
 
+    # SSE прогресса пакета (FR-2.2): комментарий-heartbeat раз в N секунд; соединение закрывается раньше
+    # таймаута nginx (1 ч), браузер переподключается с Last-Event-ID и ничего не теряет
+    sse_heartbeat_seconds: float = field(default_factory=lambda: _env_float("SSE_HEARTBEAT_SECONDS", 15))
+    sse_max_seconds: float = field(default_factory=lambda: _env_float("SSE_MAX_SECONDS", 3000))
+
     # Подсказки интерфейсу: границы уверенности находки ИИ
     confidence_high: float = 0.8
     confidence_medium: float = 0.5

@@ -1,7 +1,7 @@
-"""Окружение задач: сессия БД, хранилище, клиент LLM, ключи промежуточных файлов.
+"""Окружение задач: сессия БД, хранилище, шина событий, клиент LLM, ключи промежуточных файлов.
 
-Тесты подменяют `session_scope`, `get_storage` и `get_llm` (транзакция теста, `MemoryStorage`, подделка
-LLM без сети), поэтому задачи обращаются к ним через модуль: `runtime.session_scope()`, а не через
+Тесты подменяют `session_scope`, `get_storage`, `get_events` и `get_llm` (транзакция теста,
+`MemoryStorage`, `MemoryEventBus`, подделка LLM без сети), поэтому задачи обращаются к ним через модуль: `runtime.session_scope()`, а не через
 импорт имени.
 """
 
@@ -27,6 +27,16 @@ def session_scope() -> Iterator[Session]:
 @lru_cache(maxsize=1)
 def get_storage() -> Storage:
     return storage_from_env()
+
+
+@lru_cache(maxsize=1)
+def get_events():
+    """Шина событий пакетов и журнал dead-letter в Redis (`REDIS_URL`); в тестах — `MemoryEventBus`."""
+    import os
+
+    from worker.events import RedisEventBus
+
+    return RedisEventBus(os.environ.get("REDIS_URL") or "redis://localhost:6379/0")
 
 
 def get_llm():

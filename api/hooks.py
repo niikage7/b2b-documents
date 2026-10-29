@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 log = logging.getLogger(__name__)
 
@@ -35,12 +36,49 @@ def enqueue_rerun(batch_id: str, document_ids: list[str]) -> None:
     log.info("Пакет %s: повторный анализ %d документов поставлен в очередь", batch_id, len(document_ids))
 
 
-def publish_recalc(recalc: dict) -> None:
-    """Находку изменили: разослать подписчикам пакета `document.done` с пересчётом цвета и счётчиков.
+def enqueue_retry(batch_id: str, document_id: str, stage: str, progress: dict, view: dict) -> None:
+    """Повтор упавшего документа (FR-2.3): цепочка с этапа `stage`, затем анализ и `finalize_batch`.
 
-    Точка подключения этапа 6 (SSE через Redis). Вызывается после фиксации транзакции.
+    `progress` — данные `document.progress` документа в очереди, `view` — пакет после повтора
+    (`batches.batch_view`): интерфейс сразу показывает «В очереди» и пакет «в работе».
     """
-    log.debug("Пересчёт документа %s: публикация событий подключается на этапе 6", recalc["document"]["id"])
+    from worker import tasks
+    from worker.progress import publish_progress
+
+    try:
+        tasks.retry_document(batch_id, document_id, stage)
+    except Exception:
+        log.exception("Документ %s: не удалось поставить повтор в очередь", document_id)
+        return
+    publish_progress(batch_id, progress, view=view)
+
+
+def recalc_event(s, recalc: dict) -> tuple[str, dict] | None:
+    """Данные `document.done` после правки находки; документ ещё в обработке — событие не нужно.
+
+    Считается в транзакции запроса, публикуется после неё (`publish_recalc` в `BackgroundTasks`).
+    """
+    from db.models import Document
+    from worker.progress import document_done_event
+
+    doc = s.get(Document, uuid.UUID(recalc["document"]["id"]))
+    if doc is None or doc.status != "done":
+        return None
+    return str(doc.batch_id), document_done_event(s, doc.id, recalc)
+
+
+def publish_recalc(event: tuple[str, dict] | None) -> None:
+    """Находку изменили: подписчикам пакета — `document.done` с новым цветом и счётчиками (FR-2.2).
+
+    Автор правки уже обновил экран по ответу API; событие нужно остальным открытым вкладкам.
+    """
+    if event is None:
+        return
+    from worker.progress import publish_document_done
+
+    batch_id, data = event
+    # batch.progress не нужен: по document.done интерфейс сам перечитывает пакет
+    publish_document_done(batch_id, data, batch_progress=False)
 
 
 def run_rule_test(payload: dict, *, timeout: float) -> dict:

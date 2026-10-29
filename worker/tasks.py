@@ -36,7 +36,16 @@ build_pdf_result)`, остаток цепочки продолжается по�
 Ошибка документа не останавливает пакет: задача пишет `fail_document` и завершается без исключения,
 следующие этапы этого документа видят статус `error` и пропускают его, chord пакета доходит до
 `finalize_batch`; задачи пакета (`extract_batch_meta`, `extract_passport`) при сбое пишут журнал и идут
-дальше без предмета или паспорта. Промежуточные файлы документа: `batches/{batch}/work/{document}/` —
+дальше без предмета или паспорта.
+
+Надёжность (FR-2.3): временная ошибка этапа (ошибка ML с `retryable`, обрыв связи с БД, MinIO или Redis)
+повторяется с экспоненциальной паузой — `TASK_RETRY_BASE_SECONDS` × 2^n, всего `TASK_MAX_ATTEMPTS`
+попыток (3). Повтор Celery сохраняет место задачи в chain и chord. После последней неудачи документ
+получает «Ошибка», а запись уходит в dead-letter (`worker.events.dead_letter`); туда же попадают
+внутренние ошибки и задачи, которые упали с исключением (сигнал `task_failure`). Упавший документ
+перезапускается с этапа, на котором упал: `retry_document` (`POST /api/documents/{id}/retry`).
+
+События для SSE (FR-2.2) публикует `worker.progress` после фиксации транзакции этапа. Промежуточные файлы документа: `batches/{batch}/work/{document}/` —
 `plan.json`, `ocr/0001-0005.json`, `extraction.json`, `converted.docx` (DOC и RTF; его же размечает
 экспорт), `analysis/plan.json` (коды правил по группам), `analysis/group-01.json` (`RuleGroupResult`).
 """
@@ -46,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -55,14 +65,15 @@ from typing import Any
 
 from celery import chain, chord
 from celery.canvas import Signature
+from celery.signals import task_failure
 
 import ml
 from contracts.analysis import RuleGroupResult, RuleSpec
 from contracts.extraction import ExtractionResult, OcrPage, PageInfo
 from db import batches, pipeline
 from db.models import Batch, Document
-from ml.errors import MLError, UnsupportedFormatError
-from worker import runtime
+from ml.errors import CorruptedFileError, MLError, UnsupportedFormatError
+from worker import events, progress, runtime
 from worker.app import celery_app
 from worker.archive import Limits, Unpacker, extension
 from worker.progress import ocr_page_done, report_progress, rules_done
@@ -82,6 +93,46 @@ INTERNAL_ERROR = ("internal_error", "Не удалось обработать д
 OCR_START, OCR_SPAN = 10, 50
 ANALYSIS_START, ANALYSIS_SPAN = 80, 18
 
+# Повторы временных ошибок: всего попыток и база экспоненциальной паузы (5, 10, 20 с …)
+MAX_ATTEMPTS = max(1, int(os.environ.get("TASK_MAX_ATTEMPTS") or 3))
+RETRY_BASE_SECONDS = float(os.environ.get("TASK_RETRY_BASE_SECONDS") or 5)
+RETRY_MAX_SECONDS = 300
+
+
+def _transient_errors() -> tuple[type[BaseException], ...]:
+    """Сбои окружения, которые проходят сами: обрыв связи с PostgreSQL, MinIO, Redis, таймауты."""
+    from sqlalchemy.exc import InterfaceError, OperationalError
+
+    out: list[type[BaseException]] = [ConnectionError, TimeoutError, OperationalError, InterfaceError]
+    try:
+        from urllib3.exceptions import HTTPError
+
+        out.append(HTTPError)
+    except ImportError:  # pragma: no cover — urllib3 приходит с клиентом MinIO
+        pass
+    try:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        out += [RedisConnectionError, RedisTimeoutError]
+    except ImportError:  # pragma: no cover
+        pass
+    return tuple(out)
+
+
+TRANSIENT_ERRORS = _transient_errors()
+
+
+def is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, MLError):
+        return bool(exc.retryable)
+    return isinstance(exc, TRANSIENT_ERRORS)
+
+
+def retry_delay(retries: int) -> float:
+    """Пауза перед повтором номер `retries + 1`: экспонента с разбросом ±20 %, чтобы повторы не шли волной."""
+    return min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** retries) * random.uniform(0.8, 1.2)
+
 
 @dataclass(frozen=True)
 class DocInfo:
@@ -95,8 +146,10 @@ class DocInfo:
 # --- Обвязка этапа документа -----------------------------------------------------------------
 
 
-def _run_stage(document_id: str, stage: str, work: Callable[[DocInfo], Any]) -> Any:
-    """Журнал `task_run`, пропуск упавшего документа, ошибка → `fail_document` без исключения наружу."""
+def _run_stage(task, document_id: str, stage: str, work: Callable[[DocInfo], Any]) -> Any:
+    """Журнал `task_run`, пропуск упавшего документа, повтор временной ошибки с паузой;
+    последняя неудача → `fail_document` и dead-letter без исключения наружу (chord пакета не ломается).
+    """
     with runtime.session_scope() as s:
         doc = s.get(Document, pipeline.as_uuid(document_id))
         if doc is None:
@@ -111,23 +164,37 @@ def _run_stage(document_id: str, stage: str, work: Callable[[DocInfo], Any]) -> 
         batches.mark_processing(s, doc.batch_id)
     try:
         result = work(info)
-    except MLError as exc:
-        log.warning("%s: документ %s (%s): %s", stage, info.id, info.filename, exc)
-        _fail(info, run_id, exc.code, exc.message, detail=str(exc))
-        return None
     except Exception as exc:
-        log.exception("%s: документ %s (%s): внутренняя ошибка", stage, info.id, info.filename)
-        _fail(info, run_id, *INTERNAL_ERROR, detail=repr(exc))
+        retryable = is_retryable(exc)
+        attempt = task.request.retries + 1
+        code, message = (exc.code, exc.message) if isinstance(exc, MLError) else INTERNAL_ERROR
+        detail = str(exc) if isinstance(exc, MLError) else repr(exc)
+        if retryable and attempt < MAX_ATTEMPTS:
+            delay = retry_delay(task.request.retries)
+            log.warning("%s: документ %s (%s): попытка %d из %d не удалась (%s), повтор через %.0f с",
+                        stage, info.id, info.filename, attempt, MAX_ATTEMPTS, detail, delay)
+            with runtime.session_scope() as s:
+                pipeline.finish_task_run(s, run_id, error=f"{code}: {detail}"[:2000])
+            raise task.retry(exc=exc, countdown=delay, max_retries=MAX_ATTEMPTS - 1) from exc
+        if isinstance(exc, MLError) and not retryable:
+            log.warning("%s: документ %s (%s): %s", stage, info.id, info.filename, exc)
+        else:
+            log.error("%s: документ %s (%s): ошибка, попыток %d", stage, info.id, info.filename, attempt,
+                      exc_info=exc)
+            events.dead_letter(task=task.name, stage=stage, batch_id=info.batch_id, document_id=info.id,
+                               args=list(task.request.args or []), error=f"{code}: {detail}", attempts=attempt)
+        _fail(info, run_id, code, message, detail=detail, retryable=retryable or not isinstance(exc, MLError))
         return None
     with runtime.session_scope() as s:
         pipeline.finish_task_run(s, run_id)
     return result
 
 
-def _fail(info: DocInfo, run_id, code: str, message: str, *, detail: str) -> None:
+def _fail(info: DocInfo, run_id, code: str, message: str, *, detail: str, retryable: bool) -> None:
     with runtime.session_scope() as s:
         pipeline.finish_task_run(s, run_id, error=f"{code}: {detail}"[:2000])
-        pipeline.fail_document(s, info.id, code, message)
+        failed = pipeline.fail_document(s, info.id, code, message)
+    progress.publish_document_error(info.batch_id, failed, retryable=retryable)
 
 
 def _download(info: DocInfo, workdir: Path) -> Path:
@@ -168,7 +235,8 @@ def _save_extraction(info: DocInfo, result: ExtractionResult, *, kind: str | Non
         if normalized_key:
             doc.normalized_key = normalized_key
         pipeline.save_extraction_info(s, info.id, result)
-        pipeline.set_stage(s, info.id, "extracting", progress=45)
+        data = pipeline.set_stage(s, info.id, "extracting", progress=45)
+    progress.publish_progress(info.batch_id, data)
 
 
 # --- Пакет -----------------------------------------------------------------------------------
@@ -190,11 +258,61 @@ def rerun_batch(batch_id: str, document_ids: list[str]) -> None:
     extract_batch_meta.apply_async((str(batch_id), [str(d) for d in document_ids]))
 
 
-@celery_app.task(name="worker.tasks.unpack_batch", bind=True)
+# Этап журнала `task_run`, на котором упал документ → с какой задачи цепочки текста начинать повтор.
+# Этапы анализа перезапускаются с `analyze_document`; неизвестный этап — с начала
+TEXT_RESTART = {"extract_text": 0, "ocr_pages": 0, "build_pdf_result": 0, "extracting": 0,
+                "build_structure": 1, "index_chunks": 2}
+ANALYSIS_STAGES = {"analyze_document", "analyze_rule_group", "merge_findings"}
+
+
+def restart_stage(s, document_id) -> str:
+    """Этап, с которого повторять документ: последний упавший этап по журналу `task_run`.
+
+    `pipeline.failed_stage` смотрит на последнюю запись документа, а при параллельных группах OCR и
+    правил последней может закончиться успешная группа; здесь — последняя запись с ошибкой.
+    Записи нет (файл не прошёл проверку на входе) — с начала.
+    """
+    from sqlalchemy import select
+
+    from db.models import TaskRun
+
+    stage = s.scalar(select(TaskRun.stage)
+                     .where(TaskRun.document_id == pipeline.as_uuid(document_id), TaskRun.status == "error")
+                     .order_by(TaskRun.started_at.desc(), TaskRun.attempt.desc()).limit(1))
+    return stage or "extracting"
+
+
+def retry_signature(batch_id: str, document_id: str, stage: str) -> Signature:
+    """Цепочка повтора документа с упавшего этапа (`restart_stage`).
+
+    Заканчивается `extract_batch_meta`, как у пакета: предмет и паспорт, если их ещё нет (например,
+    упало само извещение), затем анализ документа и `finalize_batch`.
+    """
+    b, d = str(batch_id), str(document_id)
+    tail = extract_batch_meta.si(b, [d])
+    if stage in ANALYSIS_STAGES:
+        return tail
+    steps = (extract_text, build_structure, index_chunks)
+    return chain(*[t.si(d) for t in steps[TEXT_RESTART.get(stage, 0):]], tail)
+
+
+def retry_document(batch_id: str, document_id: str, stage: str) -> None:
+    """`POST /api/documents/{id}/retry`: документ снова в работе с этапа, на котором упал."""
+    retry_signature(batch_id, document_id, stage).apply_async()
+    log.info("retry_document: документ %s перезапущен с этапа %s", document_id, stage)
+
+
+# Задачи пакета не ловят ошибки сами: временный сбой повторяется, остальное — в dead-letter (task_failure)
+_BATCH_RETRY = {"autoretry_for": TRANSIENT_ERRORS, "max_retries": MAX_ATTEMPTS - 1,
+                "retry_backoff": RETRY_BASE_SECONDS, "retry_backoff_max": RETRY_MAX_SECONDS, "retry_jitter": True}
+
+
+@celery_app.task(name="worker.tasks.unpack_batch", bind=True, **_BATCH_RETRY)
 def unpack_batch(self, batch_id: str):
     """Файлы пакета → документы, затем chord по документам; распаковка zip — с защитой от zip-бомбы."""
     document_ids = unpack(batch_id)
     log.info("unpack_batch: пакет %s: документов в работу %d", batch_id, len(document_ids))
+    progress.publish_snapshot(batch_id)  # документы появились: интерфейс показывает их карточки
     if not document_ids:
         return self.replace(finalize_batch.si(batch_id))
     return self.replace(chord([document_chain(d) for d in document_ids],
@@ -273,15 +391,24 @@ def _store_entry(storage, batch_id: str, f: dict, path: str, local: Path, size: 
     return _record(f, path=path, kind=kind, size=size, object_key=key, failure=failure, document_id=document_id)
 
 
-@celery_app.task(name="worker.tasks.finalize_batch")
+@celery_app.task(name="worker.tasks.finalize_batch", **_BATCH_RETRY)
 def finalize_batch(batch_id: str) -> dict:
-    """Все документы дошли до `done` или `error`: статус пакета и счётчики (данные события `batch.done`)."""
+    """Все документы дошли до `done` или `error`: статус пакета и счётчики, событие `batch.done`."""
     with runtime.session_scope() as s:
         run_id = pipeline.start_task_run(s, batch_id=batch_id, stage="finalize_batch").id
         result = pipeline.finish_batch(s, batch_id)
         pipeline.finish_task_run(s, run_id)
     log.info("finalize_batch: пакет %s: %s", batch_id, result.get("status"))
+    progress.publish_batch_finished(batch_id, result)
     return result
+
+
+@task_failure.connect
+def _task_failed(sender=None, task_id=None, exception=None, args=None, **_):
+    """Задача упала с исключением после всех повторов (этапы документа так не падают — см. `_run_stage`)."""
+    request = getattr(sender, "request", None)
+    events.dead_letter(task=getattr(sender, "name", str(sender)), stage=None, args=list(args or []),
+                       error=repr(exception), attempts=(getattr(request, "retries", 0) or 0) + 1)
 
 
 # --- Документ --------------------------------------------------------------------------------
@@ -290,7 +417,7 @@ def finalize_batch(batch_id: str) -> dict:
 @celery_app.task(name="worker.tasks.extract_text", bind=True)
 def extract_text(self, document_id: str):
     """Текст документа; у PDF со сканами задача заменяет себя на chord групп OCR."""
-    replacement = _run_stage(document_id, "extract_text", _extract_text)
+    replacement = _run_stage(self, document_id, "extract_text", _extract_text)
     if replacement is not None:
         return self.replace(replacement)
     return None
@@ -303,7 +430,12 @@ def _extract_text(info: DocInfo) -> Signature | None:
     storage = runtime.get_storage()
     with tempfile.TemporaryDirectory(prefix="b2b-extract-") as tmp:
         src = _download(info, Path(tmp))
-        check = require_ok(src)
+        try:
+            check = require_ok(src)
+        except UnsupportedFormatError:
+            # Документы создаются только для допустимых расширений: непохожее содержимое — повреждение,
+            # как при распаковке; повтор документа показывает ту же причину
+            raise CorruptedFileError(CORRUPTED_MESSAGE) from None
         if check.kind == "pdf":
             plan = ml.plan_pdf(src)
             _put_json(info, "plan.json", [p.model_dump(mode="json") for p in plan])
@@ -328,10 +460,10 @@ def _extract_text(info: DocInfo) -> Signature | None:
     return None
 
 
-@celery_app.task(name="worker.tasks.ocr_pages")
-def ocr_pages(document_id: str, pages: list[int], total: int) -> None:
+@celery_app.task(name="worker.tasks.ocr_pages", bind=True)
+def ocr_pages(self, document_id: str, pages: list[int], total: int) -> None:
     """OCR группы страниц; слова — в `ocr/{первая}-{последняя}.json`, абзацы соберёт `build_pdf_result`."""
-    _run_stage(document_id, "ocr_pages", lambda info: _ocr_group(info, pages, total))
+    _run_stage(self, document_id, "ocr_pages", lambda info: _ocr_group(info, pages, total))
 
 
 def _ocr_group(info: DocInfo, pages: list[int], total: int) -> None:
@@ -349,10 +481,10 @@ def _ocr_group(info: DocInfo, pages: list[int], total: int) -> None:
     _put_json(info, _ocr_name(pages), [p.model_dump(mode="json") for p in result])
 
 
-@celery_app.task(name="worker.tasks.build_pdf_result")
-def build_pdf_result(document_id: str) -> None:
+@celery_app.task(name="worker.tasks.build_pdf_result", bind=True)
+def build_pdf_result(self, document_id: str) -> None:
     """Все группы OCR готовы: абзацы собираются один раз, иначе абзац на границе групп разорвётся."""
-    _run_stage(document_id, "build_pdf_result", _build_pdf_result)
+    _run_stage(self, document_id, "build_pdf_result", _build_pdf_result)
 
 
 def _build_pdf_result(info: DocInfo) -> None:
@@ -366,10 +498,10 @@ def _build_pdf_result(info: DocInfo) -> None:
     _save_extraction(info, result)
 
 
-@celery_app.task(name="worker.tasks.build_structure")
-def build_structure(document_id: str) -> None:
+@celery_app.task(name="worker.tasks.build_structure", bind=True)
+def build_structure(self, document_id: str) -> None:
     """Блоки с разделами (FR-3.1, FR-4.2); id блоков детерминированы — ручные пометки остаются на месте."""
-    _run_stage(document_id, "build_structure", _build_structure)
+    _run_stage(self, document_id, "build_structure", _build_structure)
 
 
 def _build_structure(info: DocInfo) -> None:
@@ -377,13 +509,14 @@ def _build_structure(info: DocInfo) -> None:
     blocks = ml.build_structure(ExtractionResult.model_validate_json(raw), document_id=info.id)
     with runtime.session_scope() as s:
         pipeline.save_blocks(s, info.id, blocks)
-        pipeline.set_stage(s, info.id, "extracting", progress=60)
+        data = pipeline.set_stage(s, info.id, "extracting", progress=60)
+    progress.publish_progress(info.batch_id, data)
 
 
-@celery_app.task(name="worker.tasks.index_chunks")
-def index_chunks(document_id: str) -> None:
+@celery_app.task(name="worker.tasks.index_chunks", bind=True)
+def index_chunks(self, document_id: str) -> None:
     """Фрагменты для поиска с эмбеддингами; старые фрагменты документа заменяются."""
-    _run_stage(document_id, "index_chunks", _index_chunks)
+    _run_stage(self, document_id, "index_chunks", _index_chunks)
 
 
 def _index_chunks(info: DocInfo) -> None:
@@ -393,7 +526,8 @@ def _index_chunks(info: DocInfo) -> None:
     chunks = ml.index_chunks(blocks, document_id=info.id)
     with runtime.session_scope() as s:
         pipeline.save_chunks(s, info.id, chunks)
-        pipeline.set_stage(s, info.id, "analysis", progress=80)
+        data = pipeline.set_stage(s, info.id, "analysis", progress=80)
+    progress.publish_progress(info.batch_id, data)
 
 
 # --- Анализ ----------------------------------------------------------------------------------
@@ -409,6 +543,7 @@ def _batch_stage(batch_id: str, stage: str, work: Callable[[], Any]) -> Any:
         log.exception("%s: пакет %s: сбой, этап пропущен", stage, batch_id)
         with runtime.session_scope() as s:
             pipeline.finish_task_run(s, run_id, error=repr(exc)[:2000])
+        events.dead_letter(task=f"worker.tasks.{stage}", stage=stage, batch_id=batch_id, error=repr(exc), attempts=1)
         return None
     with runtime.session_scope() as s:
         pipeline.finish_task_run(s, run_id)
@@ -462,7 +597,8 @@ def _extract_batch_meta(batch_id: str, ids: list[str]) -> bool:
         subject = ml.extract_batch_meta([(name, blocks) for _, name, blocks in documents], llm=runtime.get_llm())
         if subject:
             with runtime.session_scope() as s:
-                pipeline.set_batch_meta(s, batch_id, subject=subject)
+                meta = pipeline.set_batch_meta(s, batch_id, subject=subject)
+            progress.publish_batch_meta(batch_id, meta)
     log.info("extract_batch_meta: пакет %s: предмет закупки: %s", batch_id, subject or "не определён")
     return bool(documents) and not has_passport
 
@@ -482,7 +618,8 @@ def _extract_passport(batch_id: str, ids: list[str]) -> None:
     if passport.fields:
         # Пустой паспорт не пишется: повторный анализ попробует ещё раз
         with runtime.session_scope() as s:
-            pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"))
+            meta = pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"))
+        progress.publish_batch_meta(batch_id, meta)
 
 
 def _group_name(index: int) -> str:
@@ -492,7 +629,7 @@ def _group_name(index: int) -> str:
 @celery_app.task(name="worker.tasks.analyze_document", bind=True)
 def analyze_document(self, document_id: str):
     """Правила пакета в версиях со старта → группы по 3–4 → chord групп → `merge_findings`."""
-    replacement = _run_stage(document_id, "analyze_document", _analyze_document)
+    replacement = _run_stage(self, document_id, "analyze_document", _analyze_document)
     if replacement is not None:
         return self.replace(replacement)
     return None
@@ -511,10 +648,10 @@ def _analyze_document(info: DocInfo) -> Signature:
     return chord([analyze_rule_group.si(info.id, i) for i in range(len(plan))], merge_findings.si(info.id))
 
 
-@celery_app.task(name="worker.tasks.analyze_rule_group")
-def analyze_rule_group(document_id: str, group: int) -> None:
+@celery_app.task(name="worker.tasks.analyze_rule_group", bind=True)
+def analyze_rule_group(self, document_id: str, group: int) -> None:
     """Одна группа правил: вызов LLM, привязка цитат к блокам; кандидаты — в MinIO, БД не пишется."""
-    _run_stage(document_id, "analyze_rule_group", lambda info: _analyze_rule_group(info, group))
+    _run_stage(self, document_id, "analyze_rule_group", lambda info: _analyze_rule_group(info, group))
 
 
 def _analyze_rule_group(info: DocInfo, index: int) -> None:
@@ -535,10 +672,10 @@ def _analyze_rule_group(info: DocInfo, index: int) -> None:
                span=ANALYSIS_SPAN)
 
 
-@celery_app.task(name="worker.tasks.merge_findings")
-def merge_findings(document_id: str) -> None:
+@celery_app.task(name="worker.tasks.merge_findings", bind=True)
+def merge_findings(self, document_id: str) -> None:
     """Все группы готовы: находки ИИ документа заменяются, ручные остаются; документ `done`, цвет, счётчики."""
-    _run_stage(document_id, "merge_findings", _merge_findings)
+    _run_stage(self, document_id, "merge_findings", _merge_findings)
 
 
 def _merge_findings(info: DocInfo) -> None:
@@ -548,6 +685,8 @@ def _merge_findings(info: DocInfo) -> None:
         runtime.work_key(info.batch_id, info.id, _group_name(i)))) for i in range(len(plan))]
     with runtime.session_scope() as s:
         recalc = pipeline.merge_findings(s, info.id, results)
+        event = progress.document_done_event(s, info.id, recalc)
+    progress.publish_document_done(info.batch_id, event)
     log.info("merge_findings: %s: находок ИИ %d, цвет %s", info.id, sum(len(r.candidates) for r in results),
              (recalc.get("document") or {}).get("worst_level"))
 

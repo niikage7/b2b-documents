@@ -40,7 +40,15 @@ def fake_llm():
 
 
 @pytest.fixture
-def env(s, storage, fake_llm, monkeypatch):  # noqa: F811
+def bus():
+    """Шина событий пакетов и dead-letter в памяти вместо Redis."""
+    from worker.events import MemoryEventBus
+
+    return MemoryEventBus()
+
+
+@pytest.fixture
+def env(s, storage, fake_llm, bus, monkeypatch):  # noqa: F811
     import celery.app.task
     from celery.backends.cache import CacheBackend
 
@@ -61,9 +69,12 @@ def env(s, storage, fake_llm, monkeypatch):  # noqa: F811
     monkeypatch.setattr(runtime, "session_scope", scope)
     monkeypatch.setattr(runtime, "get_storage", lambda: storage)
     monkeypatch.setattr(runtime, "get_llm", lambda: fake_llm.client())
+    monkeypatch.setattr(runtime, "get_events", lambda: bus)
     conf = celery_app.conf
     saved = conf.task_always_eager, conf.task_eager_propagates
-    conf.task_always_eager, conf.task_eager_propagates = True, True
+    # Без propagate: в eager он пробрасывал бы и `Retry`, а повтор задачи должен выполниться на месте.
+    # Упавшая задача всё равно видна — `EagerResult.get()` поднимает её исключение
+    conf.task_always_eager, conf.task_eager_propagates = True, False
     # apply_async в eager запрещает ждать результат внутри задачи, а замена задачи на chord в eager
     # как раз ждёт его (`sig.apply().get()`); на Redis замены идут без ожидания, запрет там не нужен
     monkeypatch.setattr(celery.app.task, "denied_join_result", nullcontext)
