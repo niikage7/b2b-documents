@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -24,6 +24,8 @@ class Storage(Protocol):
     def get_bytes(self, key: str) -> bytes: ...
 
     def download(self, key: str, path: str | Path) -> None: ...
+
+    def stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]: ...
 
     def delete(self, keys: Iterable[str]) -> None: ...
 
@@ -74,6 +76,16 @@ class MinioStorage:
         self.ensure_bucket()
         self._client.fget_object(self.bucket, key, str(path))
 
+    def stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        """Объект кусками: API отдаёт выгрузку браузеру, не держа файл в памяти."""
+        self.ensure_bucket()
+        response = self._client.get_object(self.bucket, key)
+        try:
+            yield from response.stream(chunk_size)
+        finally:
+            response.close()
+            response.release_conn()
+
     def delete(self, keys: Iterable[str]) -> None:
         """Удаляет объекты; сбой отдельного ключа не прерывает остальные и не бросается наружу."""
         for key in keys:
@@ -103,6 +115,11 @@ class MemoryStorage:
 
     def download(self, key: str, path: str | Path) -> None:
         Path(path).write_bytes(self.objects[key])
+
+    def stream(self, key: str, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+        data = self.objects[key]
+        for i in range(0, len(data), chunk_size):
+            yield data[i:i + chunk_size]
 
     def delete(self, keys: Iterable[str]) -> None:
         for key in keys:

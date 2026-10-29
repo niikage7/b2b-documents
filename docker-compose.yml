@@ -43,6 +43,8 @@ x-worker-env: &worker-env
   # Повторы временных ошибок этапа: всего попыток и база экспоненциальной паузы, с
   TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-3}
   TASK_RETRY_BASE_SECONDS: ${TASK_RETRY_BASE_SECONDS:-5}
+  # Часовой пояс дат в Сводка.xlsx выгрузки пакета
+  EXPORT_TIMEZONE: ${EXPORT_TIMEZONE:-Europe/Moscow}
   # Остановка воркера (docker compose stop/restart, stop_signal SIGQUIT): задачам даётся
   # WORKER_SOFT_SHUTDOWN_SECONDS, незаконченные возвращаются в очередь и доделываются после запуска
   WORKER_SOFT_SHUTDOWN_SECONDS: ${WORKER_SOFT_SHUTDOWN_SECONDS:-20}
