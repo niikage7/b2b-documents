@@ -158,6 +158,7 @@ def test_missing_language_model_fails_instead_of_latin(monkeypatch, tmp_path):
     from ml.ocr import tesseract
 
     monkeypatch.setattr(tesseract, "_available_langs", lambda _tessdata: frozenset({"eng", "osd"}))
-    with pytest.raises(OcrError, match="rus"):
+    with pytest.raises(OcrError, match="rus") as caught:
         tesseract.require_langs("rus+eng")
+    assert not caught.value.retryable  # повтор этапа модель не установит
     tesseract.require_langs("eng")

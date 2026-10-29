@@ -55,6 +55,13 @@ class OcrError(ExtractionError):
     retryable = True
 
 
+class OcrSetupError(OcrError):
+    """Окружение OCR неполное (нет модели языка): повтор этапа не поможет."""
+
+    default_message = "Распознавание сканов недоступно: на сервере не установлена модель языка — обратитесь к администратору"
+    retryable = False
+
+
 class AnalysisError(MLError):
     code = "analysis_failed"
     default_message = "Не удалось проверить документ по правилам"

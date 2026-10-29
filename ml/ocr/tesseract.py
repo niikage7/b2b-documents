@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from ml.config import get_settings
-from ml.errors import OcrError
+from ml.errors import OcrError, OcrSetupError
 
 
 @dataclass
@@ -98,7 +98,7 @@ def require_langs(lang: str) -> None:
         return  # нет бинарника — ошибку с причиной даст сам вызов распознавания
     missing = [x for x in lang.split("+") if x and x not in available]
     if missing:
-        raise OcrError(detail=f"нет модели Tesseract для языков: {', '.join(missing)}")
+        raise OcrSetupError(detail=f"нет модели Tesseract для языков: {', '.join(missing)}")
 
 
 def recognize(img: np.ndarray, *, lang: str, dpi: int, psm: int = 3, timeout: float = 60) -> list[TsvWord]:
