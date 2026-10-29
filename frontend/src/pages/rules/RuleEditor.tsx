@@ -6,7 +6,7 @@ import { ApiError } from '../../api/http';
 import { keys } from '../../api/queries';
 import type { Level, Rule, RuleInput, RuleKind, RuleTestResult, RuleVariable, VariableType } from '../../api/types';
 import { errorMessage } from '../../components/feedback';
-import { Button, Field, LevelBadge, Segmented, Spinner } from '../../components/ui';
+import { Button, Confidence, Field, LevelBadge, Segmented, Spinner } from '../../components/ui';
 import { formatDate } from '../../lib/format';
 import { RULE_KIND_HINTS, RULE_KIND_LABELS, VARIABLE_TYPE_LABELS } from '../../lib/labels';
 import { SYSTEM_VARIABLE_NAMES, templateVariables, validateRule } from '../../lib/ruleValidation';
@@ -44,8 +44,8 @@ export function sameRule(a: RuleInput, b: RuleInput) {
 }
 
 /** Подсветка цитаты найденного фрагмента для результата теста. */
-function Quote({ text }: { text: string }) {
-  return <span className="rule-test__quote">«{text}»</span>;
+function Quote({ text, level }: { text: string; level?: Level }) {
+  return <span className={`rule-test__quote rule-test__quote--${level ?? 'critical'}`}>«{text}»</span>;
 }
 
 function TestPanel({ draft }: { draft: RuleInput }) {
@@ -82,7 +82,7 @@ function TestPanel({ draft }: { draft: RuleInput }) {
     } catch (e) {
       if ((e as Error).name === 'AbortError' || controller.signal.aborted) return;
       const message =
-        e instanceof ApiError && e.code === 'test_timeout' ? 'Проверка не уложилась в 60 секунд. Сократите текст или уточните инструкцию' : errorMessage(e);
+        e instanceof ApiError && (e.code === 'test_timeout' || e.status === 504 || e.status === 503) ? 'Проверка не уложилась в 60 секунд. Сократите текст или уточните инструкцию' : errorMessage(e);
       setState({ status: 'error', message });
     }
   };
@@ -143,13 +143,24 @@ function TestPanel({ draft }: { draft: RuleInput }) {
             </div>
             {state.result.findings.map((f, i) => (
               <div key={i} className="rule-test__item">
-                <Quote text={f.quote} />
+                <Quote text={f.quote} level={f.level} />
                 <div className="rule-test__meta">
                   {[f.section_number && `п. ${f.section_number}`, f.page && `стр. ${f.page}`].filter(Boolean).join(', ')}
                   {(f.section_number || f.page) && ' · '}
                   <LevelBadge level={f.level} small />
+                  {f.confidence_level && (
+                    <>
+                      <span>·</span>
+                      <Confidence level={f.confidence_level} />
+                    </>
+                  )}
                 </div>
                 <div className="rule-test__explanation">{f.explanation}</div>
+                {f.recommendation && (
+                  <div className="rule-test__recommendation subtle">
+                    <b>Что сделать:</b> {f.recommendation}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -245,6 +256,12 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
             value={draft.description}
             placeholder="Чем условие опасно для поставщика"
             onChange={(e) => set('description', e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                save();
+              }
+            }}
           />
         </Field>
 
@@ -278,6 +295,12 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
             rows={6}
             value={draft.prompt_template}
             onChange={(e) => set('prompt_template', e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                save();
+              }
+            }}
           />
         </Field>
         <button type="button" className="rule-editor__vars-line" aria-expanded={showVars} onClick={() => setShowVars((v) => !v)}>
@@ -320,7 +343,7 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
             {draft.variables.map((v, i) => (
               <div key={i} className="vars__row">
                 <Field error={errors[`variables[${i}].name`]}>
-                  <input className={errors[`variables[${i}].name`] ? 'input input--sm input--error mono' : 'input input--sm mono'} aria-label="Имя переменной" value={v.name} placeholder="порог" onChange={(e) => setVar(i, { name: e.target.value })} />
+                  <input className={errors[`variables[${i}].name`] ? 'input input--sm input--error mono' : 'input input--sm mono'} aria-label="Имя переменной" value={v.name} placeholder="порог" onChange={(e) => setVar(i, { name: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
                 </Field>
                 <select className="select select--sm" aria-label="Тип переменной" value={v.type} onChange={(e) => setVar(i, { type: e.target.value as VariableType })}>
                   {(['number', 'text', 'list'] as VariableType[]).map((t) => (
@@ -336,6 +359,14 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
                     value={v.value}
                     placeholder={v.type === 'list' ? 'НДС; аванс; гарантия' : v.type === 'number' ? '10' : 'текст'}
                     onChange={(e) => setVar(i, { value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (i === draft.variables.length - 1) {
+                          set('variables', [...draft.variables, { name: '', type: 'number', value: '' }]);
+                        }
+                      }
+                    }}
                   />
                 </Field>
                 <div className="row" style={{ gap: 2 }}>
