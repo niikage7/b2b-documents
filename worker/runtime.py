@@ -1,7 +1,8 @@
-"""Окружение задач: сессия БД, хранилище, ключи промежуточных файлов.
+"""Окружение задач: сессия БД, хранилище, клиент LLM, ключи промежуточных файлов.
 
-Тесты подменяют `session_scope` и `get_storage` (транзакция теста и `MemoryStorage`), поэтому задачи
-обращаются к ним через модуль: `runtime.session_scope()`, а не через импорт имени.
+Тесты подменяют `session_scope`, `get_storage` и `get_llm` (транзакция теста, `MemoryStorage`, подделка
+LLM без сети), поэтому задачи обращаются к ним через модуль: `runtime.session_scope()`, а не через
+импорт имени.
 """
 
 from __future__ import annotations
@@ -26,6 +27,13 @@ def session_scope() -> Iterator[Session]:
 @lru_cache(maxsize=1)
 def get_storage() -> Storage:
     return storage_from_env()
+
+
+def get_llm():
+    """Клиент LLM из окружения (`LLM_BASE_URL`, `LLM_MODEL`); в docker-compose — заглушка `llm-stub`."""
+    from ml.analysis.llm import default_client
+
+    return default_client()
 
 
 def work_key(batch_id: str, document_id: str, name: str) -> str:

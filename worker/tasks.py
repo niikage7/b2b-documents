@@ -1,4 +1,4 @@
-"""Задачи конвейера: от файлов пакета до блоков и фрагментов документа (FR-2.1, FR-3.3, FR-3.4).
+"""Задачи конвейера: от файлов пакета до находок (FR-2.1, FR-3.3, FR-3.4, FR-4.1, FR-9.3).
 
 Контракт 3 — сигнатуры задач. Все задачи принимают только id, результат пишут в БД
 (промежуточные данные — JSON-файлами в MinIO рядом с исходником) и идемпотентны: повтор
@@ -10,17 +10,35 @@
     build_pdf_result(document_id)           ingest    абзацы PDF из текстового слоя и всех групп OCR
     build_structure(document_id)            ingest    блоки с разделами → таблица block
     index_chunks(document_id)               analysis  фрагменты с эмбеддингами → таблица chunk
-    analyze_document(document_id)           analysis  находки ИИ → merge_findings (анализ по правилам — этап 5)
+    extract_batch_meta(batch_id, doc_ids)   analysis  предмет закупки → batch.subject; заменяет себя на chord анализа
+    analyze_document(document_id)           analysis  правила пакета → группы по 3–4; заменяет себя на chord групп
+    analyze_rule_group(document_id, group)  analysis  кандидаты в находки одной группы → analysis/group-NN.json
+    merge_findings(document_id)             analysis  находки ИИ всех групп → БД; документ done, цвет и счётчики
+    extract_passport(batch_id, doc_ids)     analysis  паспорт закупки → batch.meta, параллельно с анализом
     finalize_batch(batch_id)                ingest    статус и счётчики пакета
+    rule_test(payload)                      analysis  тест правила с экрана «Правила», без записи в БД
 
-Канва пакета: `unpack_batch` → `chord(group(цепочка документа, ...), finalize_batch)`, цепочка документа —
-`extract_text | build_structure | index_chunks | analyze_document`. У скана `extract_text` заменяет себя на
-`chord(group(ocr_pages по 5 страниц), build_pdf_result)`, остаток цепочки продолжается после него.
+Канва пакета:
+
+    unpack_batch
+      → chord(group(extract_text | build_structure | index_chunks, ...), extract_batch_meta)
+      → chord(group(analyze_document, ..., extract_passport), finalize_batch)
+    analyze_document → chord(group(analyze_rule_group по группам правил), merge_findings)
+
+Анализ ждёт текст всех документов пакета: предмет закупки входит в запрос каждого правила, а берётся он
+из извещения. У скана `extract_text` заменяет себя на `chord(group(ocr_pages по 5 страниц),
+build_pdf_result)`, остаток цепочки продолжается после него. Повторный анализ (`rerun_batch`) начинается
+с `extract_batch_meta`: предмет и паспорт уже есть, заново считаются только находки.
+
+`rule_test` — исключение из правила «только id»: правило может быть ещё не сохранено, поэтому задача
+получает его целиком вместе с текстом или id документа и возвращает результат, а не пишет его в БД.
 
 Ошибка документа не останавливает пакет: задача пишет `fail_document` и завершается без исключения,
 следующие этапы этого документа видят статус `error` и пропускают его, chord пакета доходит до
-`finalize_batch`. Промежуточные файлы документа: `batches/{batch}/work/{document}/` — `plan.json`,
-`ocr/0001-0005.json`, `extraction.json`, `converted.docx` (DOC и RTF; его же размечает экспорт).
+`finalize_batch`; задачи пакета (`extract_batch_meta`, `extract_passport`) при сбое пишут журнал и идут
+дальше без предмета или паспорта. Промежуточные файлы документа: `batches/{batch}/work/{document}/` —
+`plan.json`, `ocr/0001-0005.json`, `extraction.json`, `converted.docx` (DOC и RTF; его же размечает
+экспорт), `analysis/plan.json` (коды правил по группам), `analysis/group-01.json` (`RuleGroupResult`).
 """
 
 from __future__ import annotations
@@ -39,14 +57,15 @@ from celery import chain, chord
 from celery.canvas import Signature
 
 import ml
+from contracts.analysis import RuleGroupResult, RuleSpec
 from contracts.extraction import ExtractionResult, OcrPage, PageInfo
 from db import batches, pipeline
-from db.models import Document
+from db.models import Batch, Document
 from ml.errors import MLError, UnsupportedFormatError
 from worker import runtime
 from worker.app import celery_app
 from worker.archive import Limits, Unpacker, extension
-from worker.progress import ocr_page_done, report_progress
+from worker.progress import ocr_page_done, report_progress, rules_done
 
 log = logging.getLogger(__name__)
 
@@ -58,8 +77,10 @@ DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 CORRUPTED_MESSAGE = "Файл повреждён и не открывается — он не будет проверен"
 INTERNAL_ERROR = ("internal_error", "Не удалось обработать документ из-за внутренней ошибки — попробуйте повторить")
 
-# Процент документа на границах этапов: извлечение до 45, OCR — от 10 до 60, анализ — с 65
+# Процент документа на границах этапов: извлечение до 45, OCR — от 10 до 60, фрагменты — 65–80,
+# анализ по правилам — от 80 до 98
 OCR_START, OCR_SPAN = 10, 50
+ANALYSIS_START, ANALYSIS_SPAN = 80, 18
 
 
 @dataclass(frozen=True)
@@ -154,14 +175,9 @@ def _save_extraction(info: DocInfo, result: ExtractionResult, *, kind: str | Non
 
 
 def document_chain(document_id: str) -> Signature:
+    """Текст документа: извлечение, структура, фрагменты. Анализ начинается после всех документов пакета."""
     d = str(document_id)
-    return chain(extract_text.si(d), build_structure.si(d), index_chunks.si(d), analyze_document.si(d))
-
-
-def _documents_chord(batch_id: str, document_ids: list[str], make: Callable[[str], Signature]) -> Signature:
-    if not document_ids:
-        return finalize_batch.si(batch_id)
-    return chord([make(d) for d in document_ids], finalize_batch.si(batch_id))
+    return chain(extract_text.si(d), build_structure.si(d), index_chunks.si(d))
 
 
 def process_batch(batch_id: str) -> None:
@@ -171,7 +187,7 @@ def process_batch(batch_id: str) -> None:
 
 def rerun_batch(batch_id: str, document_ids: list[str]) -> None:
     """Повторный анализ (`POST /batches/{id}/rerun`): текст и фрагменты уже есть, заново — только анализ."""
-    _documents_chord(str(batch_id), [str(d) for d in document_ids], analyze_document.si).apply_async()
+    extract_batch_meta.apply_async((str(batch_id), [str(d) for d in document_ids]))
 
 
 @celery_app.task(name="worker.tasks.unpack_batch", bind=True)
@@ -179,7 +195,10 @@ def unpack_batch(self, batch_id: str):
     """Файлы пакета → документы, затем chord по документам; распаковка zip — с защитой от zip-бомбы."""
     document_ids = unpack(batch_id)
     log.info("unpack_batch: пакет %s: документов в работу %d", batch_id, len(document_ids))
-    return self.replace(_documents_chord(batch_id, document_ids, document_chain))
+    if not document_ids:
+        return self.replace(finalize_batch.si(batch_id))
+    return self.replace(chord([document_chain(d) for d in document_ids],
+                              extract_batch_meta.si(batch_id, document_ids)))
 
 
 def unpack(batch_id: str) -> list[str]:
@@ -377,16 +396,184 @@ def _index_chunks(info: DocInfo) -> None:
         pipeline.set_stage(s, info.id, "analysis", progress=80)
 
 
-@celery_app.task(name="worker.tasks.analyze_document")
-def analyze_document(document_id: str) -> None:
-    """Находки ИИ документа и итог документа (`done`, цвет, счётчики).
-
-    Анализ по правилам подключает этап 5: `batch_rules` → `group_rules` → chord из `analyze_rule_group`
-    → `merge_findings`. Пока результат пустой: документ завершается без находок ИИ, ручные остаются.
-    """
-    _run_stage(document_id, "analyze_document", _analyze_document)
+# --- Анализ ----------------------------------------------------------------------------------
 
 
-def _analyze_document(info: DocInfo) -> None:
+def _batch_stage(batch_id: str, stage: str, work: Callable[[], Any]) -> Any:
+    """Этап пакета без права упасть: сбой пишется в журнал, конвейер идёт дальше без его результата."""
     with runtime.session_scope() as s:
-        pipeline.merge_findings(s, info.id, [])
+        run_id = pipeline.start_task_run(s, batch_id=batch_id, stage=stage).id
+    try:
+        result = work()
+    except Exception as exc:
+        log.exception("%s: пакет %s: сбой, этап пропущен", stage, batch_id)
+        with runtime.session_scope() as s:
+            pipeline.finish_task_run(s, run_id, error=repr(exc)[:2000])
+        return None
+    with runtime.session_scope() as s:
+        pipeline.finish_task_run(s, run_id)
+    return result
+
+
+def _ready_documents(document_ids: list[str]) -> list[tuple[str, str, list]]:
+    """Документы с текстом (без ошибки): [(id, имя файла, блоки)] — вход предмета и паспорта закупки."""
+    out = []
+    with runtime.session_scope() as s:
+        for d in document_ids:
+            doc = s.get(Document, pipeline.as_uuid(d))
+            if doc is not None and doc.status != "error":
+                out.append((str(doc.id), doc.filename, pipeline.load_blocks(s, doc.id)))
+    return out
+
+
+def _search(document_ids: list[str]):
+    """Фрагменты документов из таблицы `chunk` в памяти: транзакция не держится, пока идут вызовы LLM."""
+    from ml.analysis.search import InMemorySearch
+
+    with runtime.session_scope() as s:
+        pg = ml.PgVectorSearch(s.connection().connection.driver_connection)
+        return InMemorySearch({d: pg.chunks(d) for d in document_ids})
+
+
+@celery_app.task(name="worker.tasks.extract_batch_meta", bind=True)
+def extract_batch_meta(self, batch_id: str, document_ids: list[str]):
+    """Предмет закупки, затем анализ документов и паспорт закупки параллельно → `finalize_batch`."""
+    ids = [str(d) for d in document_ids]
+    need_passport = _batch_stage(batch_id, "extract_batch_meta", lambda: _extract_batch_meta(batch_id, ids))
+    header = [analyze_document.si(d) for d in ids]
+    if need_passport:
+        header.append(extract_passport.si(batch_id, ids))
+    if not header:
+        return self.replace(finalize_batch.si(batch_id))
+    return self.replace(chord(header, finalize_batch.si(batch_id)))
+
+
+def _extract_batch_meta(batch_id: str, ids: list[str]) -> bool:
+    """Предмет закупки для правил: шаблоном по извещению, иначе коротким вызовом LLM.
+
+    Предмет, который уже есть (повторный анализ, правка пользователем), не перезаписывается.
+    Возвращает, нужен ли паспорт закупки: его ещё нет, а документы с текстом есть.
+    """
+    with runtime.session_scope() as s:
+        batch = s.get(Batch, pipeline.as_uuid(batch_id))
+        subject, has_passport = batch.subject, "passport" in (batch.meta or {})
+    documents = [] if subject and has_passport else _ready_documents(ids)
+    if not subject and documents:
+        subject = ml.extract_batch_meta([(name, blocks) for _, name, blocks in documents], llm=runtime.get_llm())
+        if subject:
+            with runtime.session_scope() as s:
+                pipeline.set_batch_meta(s, batch_id, subject=subject)
+    log.info("extract_batch_meta: пакет %s: предмет закупки: %s", batch_id, subject or "не определён")
+    return bool(documents) and not has_passport
+
+
+@celery_app.task(name="worker.tasks.extract_passport")
+def extract_passport(batch_id: str, document_ids: list[str]) -> None:
+    """Паспорт закупки (НМЦК, обеспечения, сроки) в `batch.meta`; ошибка LLM оставляет паспорт пустым."""
+    _batch_stage(batch_id, "extract_passport", lambda: _extract_passport(batch_id, [str(d) for d in document_ids]))
+
+
+def _extract_passport(batch_id: str, ids: list[str]) -> None:
+    documents = _ready_documents(ids)
+    if not documents:
+        return
+    passport = ml.extract_passport(documents, search=_search([d for d, _, _ in documents]), llm=runtime.get_llm())
+    log.info("extract_passport: пакет %s: полей %d", batch_id, len(passport.fields))
+    if passport.fields:
+        # Пустой паспорт не пишется: повторный анализ попробует ещё раз
+        with runtime.session_scope() as s:
+            pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"))
+
+
+def _group_name(index: int) -> str:
+    return f"analysis/group-{index + 1:02d}.json"
+
+
+@celery_app.task(name="worker.tasks.analyze_document", bind=True)
+def analyze_document(self, document_id: str):
+    """Правила пакета в версиях со старта → группы по 3–4 → chord групп → `merge_findings`."""
+    replacement = _run_stage(document_id, "analyze_document", _analyze_document)
+    if replacement is not None:
+        return self.replace(replacement)
+    return None
+
+
+def _analyze_document(info: DocInfo) -> Signature:
+    with runtime.session_scope() as s:
+        rules = pipeline.batch_rules(s, info.batch_id)
+    plan = [[r.code for r in group] for group in ml.group_rules(rules)]
+    _put_json(info, "analysis/plan.json", plan)
+    total = sum(len(codes) for codes in plan)
+    report_progress(info.id, "analysis", ANALYSIS_START, {"rules_done": 0, "rules_total": total})
+    if not plan:
+        return merge_findings.si(info.id)  # включённых правил нет: документ без находок ИИ
+    log.info("analyze_document: %s: правил %d, групп %d", info.id, total, len(plan))
+    return chord([analyze_rule_group.si(info.id, i) for i in range(len(plan))], merge_findings.si(info.id))
+
+
+@celery_app.task(name="worker.tasks.analyze_rule_group")
+def analyze_rule_group(document_id: str, group: int) -> None:
+    """Одна группа правил: вызов LLM, привязка цитат к блокам; кандидаты — в MinIO, БД не пишется."""
+    _run_stage(document_id, "analyze_rule_group", lambda info: _analyze_rule_group(info, group))
+
+
+def _analyze_rule_group(info: DocInfo, index: int) -> None:
+    plan = _get_json(info, "analysis/plan.json")
+    with runtime.session_scope() as s:
+        by_code = {r.code: r for r in pipeline.batch_rules(s, info.batch_id)}
+        subject = s.get(Batch, pipeline.as_uuid(info.batch_id)).subject
+        blocks = pipeline.load_blocks(s, info.id)
+    rules = [by_code[code] for code in plan[index] if code in by_code]
+    result = ml.analyze_rule_group(blocks, rules, subject=subject, document_id=info.id, search=_search([info.id]),
+                                   llm=runtime.get_llm())
+    runtime.get_storage().put_bytes(runtime.work_key(info.batch_id, info.id, _group_name(index)),
+                                    result.model_dump_json().encode(), content_type="application/json")
+    log.info("analyze_rule_group: %s: группа %d (%s): кандидатов %d, отброшено %d, вызовов LLM %d",
+             info.id, index + 1, ", ".join(plan[index]), len(result.candidates), len(result.dropped),
+             result.usage.calls)
+    rules_done(info.id, sum(len(codes) for codes in plan), len(plan[index]), start=ANALYSIS_START,
+               span=ANALYSIS_SPAN)
+
+
+@celery_app.task(name="worker.tasks.merge_findings")
+def merge_findings(document_id: str) -> None:
+    """Все группы готовы: находки ИИ документа заменяются, ручные остаются; документ `done`, цвет, счётчики."""
+    _run_stage(document_id, "merge_findings", _merge_findings)
+
+
+def _merge_findings(info: DocInfo) -> None:
+    plan = _get_json(info, "analysis/plan.json")
+    storage = runtime.get_storage()
+    results = [RuleGroupResult.model_validate_json(storage.get_bytes(
+        runtime.work_key(info.batch_id, info.id, _group_name(i)))) for i in range(len(plan))]
+    with runtime.session_scope() as s:
+        recalc = pipeline.merge_findings(s, info.id, results)
+    log.info("merge_findings: %s: находок ИИ %d, цвет %s", info.id, sum(len(r.candidates) for r in results),
+             (recalc.get("document") or {}).get("worst_level"))
+
+
+@celery_app.task(name="worker.tasks.rule_test")
+def rule_test(payload: dict) -> dict:
+    """`POST /api/rules/test` (FR-9.3): правило из формы на тексте или на документе, не дольше 60 с.
+
+    `payload` — `{"rule": {...RuleSpec}, "text": "..."}` или `{"rule": {...}, "document_id": "..."}`.
+    Возвращает `{"result": RuleTestResult}` или `{"error": {code, message, retryable}}`: ошибку ML
+    API показывает как есть, а исключение через бэкенд результатов потеряло бы свой класс.
+    """
+    try:
+        rule = RuleSpec.model_validate(payload["rule"])
+        document_id = payload.get("document_id")
+        if document_id:
+            document_id = str(document_id)
+            with runtime.session_scope() as s:
+                doc = s.get(Document, pipeline.as_uuid(document_id))
+                subject = s.get(Batch, doc.batch_id).subject if doc is not None else None
+                blocks = pipeline.load_blocks(s, document_id) if doc is not None else []
+            result = ml.test_rule(rule, blocks=blocks, document_id=document_id, search=_search([document_id]),
+                                  subject=subject, llm=runtime.get_llm())
+        else:
+            result = ml.test_rule(rule, text=payload.get("text") or "", llm=runtime.get_llm())
+    except MLError as exc:
+        log.info("rule_test: %s: %s", exc.code, exc)
+        return {"error": {"code": exc.code, "message": exc.message, "retryable": exc.retryable}}
+    return {"result": result.model_dump(mode="json")}

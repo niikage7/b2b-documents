@@ -41,3 +41,27 @@ def publish_recalc(recalc: dict) -> None:
     Точка подключения этапа 6 (SSE через Redis). Вызывается после фиксации транзакции.
     """
     log.debug("Пересчёт документа %s: публикация событий подключается на этапе 6", recalc["document"]["id"])
+
+
+def run_rule_test(payload: dict, *, timeout: float) -> dict:
+    """Тест правила (FR-9.3) в очереди analysis: образ API лёгкий, а поиску нужна модель эмбеддингов.
+
+    Ждёт ответ воркера не дольше `timeout` секунд; возвращает `{"result": ...}` или `{"error": ...}`
+    из задачи `rule_test`. Очередь недоступна или ответа нет — исключение ML с текстом для пользователя.
+    """
+    from celery.exceptions import TimeoutError as CeleryTimeout
+
+    from ml.errors import LLMError, RuleTestTimeoutError
+    from worker import tasks
+
+    try:
+        async_result = tasks.rule_test.apply_async((payload,))
+    except Exception as exc:
+        log.exception("Тест правила: не удалось поставить задачу в очередь")
+        raise LLMError("Проверка правила сейчас недоступна — повторите через минуту") from exc
+    try:
+        return async_result.get(timeout=timeout)
+    except CeleryTimeout as exc:
+        raise RuleTestTimeoutError() from exc
+    finally:
+        async_result.forget()

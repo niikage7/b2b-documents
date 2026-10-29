@@ -164,3 +164,84 @@ def test_profiles_crud(world, client):
     assert client.delete(f"/api/rule-profiles/{pid}").status_code == 204
     assert client.delete(f"/api/rule-profiles/{pid}").status_code == 404
     assert client.patch(f"/api/rule-profiles/{uuid.uuid4()}", json={"name": "Х"}).status_code == 404
+
+
+# --- Тест правила (FR-9.3) -------------------------------------------------------------------
+
+
+def _draft(**over) -> dict:
+    from ml.checklist import load_default_checklist
+
+    _, specs = load_default_checklist()
+    rule = next(r for r in specs if r.code == "R-04").model_dump(mode="json", exclude={"id", "version_id",
+                                                                                        "query_embedding"})
+    return rule | {"profile_id": ""} | over  # форма редактора шлёт и лишние поля
+
+
+@pytest.fixture
+def eager_worker(monkeypatch):
+    """Задача `rule_test` выполняется в процессе теста: LLM и эмбеддинги — подделки, без сети."""
+    from ml.analysis.embeddings import set_default_embedder
+    from tests.fakes import FakeEmbedder, FakeLLM
+    from worker import runtime
+    from worker.app import celery_app
+
+    fake = FakeLLM()
+    monkeypatch.setattr(runtime, "get_llm", lambda: fake.client())
+    saved = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    set_default_embedder(FakeEmbedder())
+    yield fake
+    set_default_embedder(None)
+    celery_app.conf.task_always_eager = saved
+
+
+def test_rule_test_on_text(world, client, eager_worker):
+    quote = "в течение 2 (двух) рабочих дней с даты заявки"
+    eager_worker.plan = {"R-04": [(quote, "Слишком короткий срок поставки")]}
+    r = client.post("/api/rules/test", json={"rule": _draft(), "text": f"Поставка осуществляется {quote}."})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert isinstance(body["duration_ms"], int)
+    [finding] = body["findings"]
+    assert finding["quote"] == quote and finding["level"] == "critical"
+    assert finding["confidence_level"] == "high" and "confidence" not in finding
+    assert finding["explanation"] == "Слишком короткий срок поставки"
+
+
+def test_rule_test_validation(world, client, eager_worker):
+    r = client.post("/api/rules/test", json={"rule": _draft(), "text": "  "})
+    assert r.status_code == 422 and r.json()["error"]["details"]["fields"] == {"text": "Вставьте текст для проверки"}
+    r = client.post("/api/rules/test", json={"rule": _draft(), "text": "а" * 20_001})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "text_too_long"
+    r = client.post("/api/rules/test", json={"rule": _draft(prompt_template=""), "text": "Текст"})
+    assert r.status_code == 422 and "prompt_template" in r.json()["error"]["details"]["fields"]
+    r = client.post("/api/rules/test", json={"rule": _draft(prompt_template="Проверь {{нет_такой}}"), "text": "Т"})
+    assert r.status_code == 422 and r.json()["error"]["details"]["fields"]
+    r = client.post("/api/rules/test", json={"rule": _draft(), "document_id": str(uuid.uuid4())})
+    assert r.status_code == 404 and r.json()["error"]["message"] == "Документ не найден"
+    assert not eager_worker.requests  # до воркера неверный запрос не доходит
+
+
+def test_rule_test_only_for_methodologist(s, users, client, app):
+    seed(s)
+    login(client, "lawyer")
+    assert client.post("/api/rules/test", json={"rule": _draft(), "text": "Текст"}).status_code == 403
+
+
+def test_rule_test_timeout_and_worker_errors(world, client, monkeypatch):
+    from api import hooks
+    from ml.errors import RuleTestTimeoutError
+
+    def slow(payload, *, timeout):
+        assert timeout == 70
+        raise RuleTestTimeoutError()
+
+    monkeypatch.setattr(hooks, "run_rule_test", slow)
+    r = client.post("/api/rules/test", json={"rule": _draft(), "text": "Текст"})
+    assert r.status_code == 503 and r.json()["error"]["code"] == "test_timeout"
+
+    error = {"code": "llm_unavailable", "message": "Сервис проверки ИИ временно недоступен", "retryable": True}
+    monkeypatch.setattr(hooks, "run_rule_test", lambda payload, *, timeout: {"error": error})
+    r = client.post("/api/rules/test", json={"rule": _draft(), "text": "Текст"})
+    assert r.status_code == 503 and r.json()["error"]["message"] == error["message"]

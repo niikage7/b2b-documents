@@ -1,7 +1,7 @@
-"""Профили правил и правила: настройка чек-листа без деплоя (FR-9.1).
+"""Профили правил и правила: настройка чек-листа без деплоя (FR-9.1), тест правила (FR-9.3).
 
 Список профилей и системные переменные видны всем (профиль выбирается при запуске пакета),
-сами правила читает и меняет только методолог.
+сами правила читает, меняет и проверяет только методолог.
 """
 
 from __future__ import annotations
@@ -12,9 +12,11 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from api import hooks
 from api.deps import CurrentUser, DbSession, require_role
-from db import rules
-from db.models import User
+from db import derived, rules
+from db.errors import Conflict, DataError, NotFound, ValidationFailed
+from db.models import Document, User
 
 router = APIRouter(tags=["rules"])
 
@@ -129,3 +131,98 @@ def update_rule(rule_id: uuid.UUID, body: RulePatch, user: Methodologist, s: DbS
 @router.delete("/rules/{rule_id}", status_code=204)
 def delete_rule(rule_id: uuid.UUID, user: Methodologist, s: DbSession) -> None:
     rules.delete_rule(s, rule_id)
+
+
+# --- Тест правила (FR-9.3) -------------------------------------------------------------------
+
+RULE_TEST_MAX_TEXT = 20_000
+# Сверх 60 с самой проверки — запас на очередь и доставку ответа
+RULE_TEST_QUEUE_SECONDS = 10
+
+
+class RuleDraft(BaseModel):
+    """Правило из формы редактора, в том числе не сохранённое; лишние поля формы игнорируются."""
+
+    code: str = Field("", max_length=40)
+    title: str = Field("", max_length=300)
+    description: str = Field("", max_length=5000)
+    level: Literal["critical", "warning"]
+    kind: Literal["semantic_llm", "llm"]
+    prompt_template: str = Field("", max_length=20000)
+    variables: list[VariableIn] = Field(default_factory=list, max_length=50)
+
+
+class RuleTestIn(BaseModel):
+    rule: RuleDraft
+    document_id: uuid.UUID | None = None
+    text: str | None = None
+
+
+class RuleTestFailed(DataError):
+    """Ошибка ML из воркера: код и текст как есть, статус — по виду ошибки."""
+
+    def __init__(self, error: dict):
+        super().__init__(error["message"], code=error["code"], details={"retryable": error.get("retryable", False)})
+        if error.get("retryable"):
+            self.status = 503
+        elif error["code"] in ("rule_template", "text_too_long"):
+            self.status = 422
+        else:
+            self.status = 500
+
+
+def _check_draft(rule: RuleDraft) -> dict:
+    from contracts.analysis import RuleSpec, RuleVariable
+    from ml import validate_rule
+
+    fields = {name: "Поле нужно заполнить" for name in ("code", "title", "description", "prompt_template")
+              if not getattr(rule, name).strip()}
+    if fields:
+        raise ValidationFailed(fields)
+    spec = RuleSpec(code=rule.code.strip(), title=rule.title, description=rule.description, level=rule.level,
+                    kind=rule.kind, prompt_template=rule.prompt_template,
+                    variables=[RuleVariable(**v.model_dump()) for v in rule.variables])
+    errors, _ = validate_rule(spec)
+    for err in errors:
+        fields.setdefault(err.field, err.message)
+    if fields:
+        raise ValidationFailed(fields)
+    return spec.model_dump(mode="json", exclude={"id", "version_id", "query_embedding"})
+
+
+@router.post("/rules/test")
+def test_rule(body: RuleTestIn, user: Methodologist, s: DbSession) -> dict:
+    """Прогон правила до включения на документе или своём тексте, без записи находок; не дольше 60 с.
+
+    Работает в очереди analysis: тот же движок, что и анализ пакета. 422 — ошибки правила или текста,
+    503 `test_timeout` — проверка не уложилась в 60 секунд.
+    """
+    payload: dict = {"rule": _check_draft(body.rule)}
+    if body.document_id is not None:
+        doc = s.get(Document, body.document_id)
+        if doc is None:
+            raise NotFound("Документ не найден")
+        if doc.status != "done":
+            raise Conflict("Документ ещё обрабатывается или не обработан — выберите другой")
+        payload["document_id"] = str(doc.id)
+    else:
+        text = body.text or ""
+        if not text.strip():
+            raise ValidationFailed({"text": "Вставьте текст для проверки"})
+        if len(text) > RULE_TEST_MAX_TEXT:
+            raise ValidationFailed({"text": "Текст длиннее 20 000 символов"}, code="text_too_long")
+        payload["text"] = text
+    s.commit()  # только чтение: транзакция не держит соединение, пока воркер проверяет правило
+
+    from ml.config import get_settings
+
+    answer = hooks.run_rule_test(payload, timeout=get_settings().test_rule_timeout + RULE_TEST_QUEUE_SECONDS)
+    if "error" in answer:
+        raise RuleTestFailed(answer["error"])
+    result = answer["result"]
+    findings = [{k: v for k, v in f.items() if k != "confidence"}
+                | {"confidence_level": derived.confidence_level(f.get("confidence"))} for f in result["findings"]]
+    return {"findings": findings, "duration_ms": result["duration_ms"], "dropped": result.get("dropped", 0)}
+
+
+test_rule.__test__ = False  # не тест pytest, несмотря на имя

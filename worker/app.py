@@ -19,7 +19,12 @@ QUEUES = ("ingest", "ocr", "analysis", "export")
 ROUTES = {
     "worker.tasks.ocr_pages": "ocr",
     "worker.tasks.index_chunks": "analysis",
+    "worker.tasks.extract_batch_meta": "analysis",
     "worker.tasks.analyze_document": "analysis",
+    "worker.tasks.analyze_rule_group": "analysis",
+    "worker.tasks.merge_findings": "analysis",
+    "worker.tasks.extract_passport": "analysis",
+    "worker.tasks.rule_test": "analysis",
 }
 
 

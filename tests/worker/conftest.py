@@ -1,7 +1,8 @@
 """Тесты задач конвейера: настоящий PostgreSQL (`TEST_DATABASE_URL`), Celery в режиме eager, без сети и LLM.
 
 Задачи открывают сессии через `worker.runtime.session_scope`: здесь это точка сохранения внутри
-транзакции теста, поэтому всё откатывается в конце. Хранилище — `MemoryStorage`, эмбеддинги — подделка.
+транзакции теста, поэтому всё откатывается в конце. Хранилище — `MemoryStorage`, эмбеддинги и LLM —
+подделки (`fake_llm` отвечает по плану теста, без сети).
 """
 
 from __future__ import annotations
@@ -10,13 +11,13 @@ import io
 import tempfile
 import uuid
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
 
 from tests.db.conftest import pg_url, s  # noqa: F401 — фикстуры БД используются и здесь
-from tests.fakes import FakeEmbedder
+from tests.fakes import FakeEmbedder, FakeLLM
 
 WINDOWS_FONTS = {"BENCH_FONT_SERIF": "C:/Windows/Fonts/times.ttf", "BENCH_FONT_SERIF_BOLD": "C:/Windows/Fonts/timesbd.ttf"}
 
@@ -33,7 +34,14 @@ def storage():
 
 
 @pytest.fixture
-def env(s, storage, monkeypatch):  # noqa: F811
+def fake_llm():
+    """LLM задач конвейера; тест задаёт план находок: `fake_llm.plan = {"R-02": [(цитата, пояснение)]}`."""
+    return FakeLLM()
+
+
+@pytest.fixture
+def env(s, storage, fake_llm, monkeypatch):  # noqa: F811
+    import celery.app.task
     from celery.backends.cache import CacheBackend
 
     from ml.analysis.embeddings import set_default_embedder
@@ -52,9 +60,13 @@ def env(s, storage, monkeypatch):  # noqa: F811
 
     monkeypatch.setattr(runtime, "session_scope", scope)
     monkeypatch.setattr(runtime, "get_storage", lambda: storage)
+    monkeypatch.setattr(runtime, "get_llm", lambda: fake_llm.client())
     conf = celery_app.conf
     saved = conf.task_always_eager, conf.task_eager_propagates
     conf.task_always_eager, conf.task_eager_propagates = True, True
+    # apply_async в eager запрещает ждать результат внутри задачи, а замена задачи на chord в eager
+    # как раз ждёт его (`sig.apply().get()`); на Redis замены идут без ожидания, запрет там не нужен
+    monkeypatch.setattr(celery.app.task, "denied_join_result", nullcontext)
     # chord в режиме eager всё равно обращается к бэкенду результатов: вместо Redis — память процесса
     saved_backend = getattr(celery_app._local, "backend", None)
     celery_app._local.backend = CacheBackend(app=celery_app, url="memory://")

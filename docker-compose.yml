@@ -1,6 +1,7 @@
 # Светофор рисков: окружение целиком. Запуск: docker compose up --build
 # Значения берутся из .env (шаблон — .env.example); без .env подставляются безопасные для разработки.
-# Состав растёт по этапам: здесь БД, Redis, MinIO, API и воркеры Celery; Flower и фронтенд добавляются позже.
+# Состав растёт по этапам: здесь БД, Redis, MinIO, API, воркеры Celery и заглушка LLM; Flower и фронтенд
+# добавляются позже.
 
 name: b2b
 
@@ -9,7 +10,9 @@ x-healthcheck-defaults: &hc
   timeout: 5s
   retries: 20
 
-# Окружение воркеров: БД, брокер, MinIO и настройки ML. LLM конвейер пока не вызывает: адрес заглушки — этап 5
+# Окружение воркеров: БД, брокер, MinIO и настройки ML.
+# LLM по умолчанию — заглушка llm-stub (бесплатно, без ключа). Настоящая модель включается в .env:
+# LLM_BASE_URL, LLM_MODEL и LLM_API_KEY провайдера, например OpenRouter
 x-worker-env: &worker-env
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-b2b}:${POSTGRES_PASSWORD:-b2b}@db:5432/${POSTGRES_DB:-b2b}
   REDIS_URL: redis://redis:6379/0
@@ -25,6 +28,18 @@ x-worker-env: &worker-env
   UNPACK_MAX_FILES: ${UNPACK_MAX_FILES:-500}
   UNPACK_MAX_DEPTH: ${UNPACK_MAX_DEPTH:-3}
   EMBEDDING_DEVICE: cpu
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://llm-stub:8080/v1}
+  # Своё имя модели у заглушки: кеш ответов LLM не перепутает её с настоящей моделью
+  LLM_MODEL: ${LLM_MODEL:-stub/b2b-llm-stub}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_META_MODEL: ${LLM_META_MODEL:-}
+  LLM_TIMEOUT: ${LLM_TIMEOUT:-90}
+  LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+  LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-8}
+  LLM_REASONING: ${LLM_REASONING:-none}
+  LLM_CACHE: ${LLM_CACHE:-1}
+  RULES_PER_GROUP: ${RULES_PER_GROUP:-4}
+  TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
 
 x-worker: &worker
   build:
@@ -104,6 +119,8 @@ services:
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-demo}
+      # Тест правила ждёт ответ воркера столько секунд и ещё 10 на очередь
+      TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -139,6 +156,18 @@ services:
       <<: *worker-env
       WORKER_QUEUES: ocr
       WORKER_CONCURRENCY: ${OCR_WORKER_CONCURRENCY:-2}
+
+  # Заглушка LLM для разработки: отвечает как OpenAI chat/completions, цитаты берёт из запроса
+  llm-stub:
+    build:
+      context: ./devtools/llm_stub
+    image: b2b-llm-stub:local
+    environment:
+      LLM_STUB_DELAY: ${LLM_STUB_DELAY:-0}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      <<: *hc
+    restart: unless-stopped
 
 volumes:
   pgdata:
