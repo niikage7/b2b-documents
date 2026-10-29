@@ -77,6 +77,30 @@ def tesseract_version() -> str:
     return m.group(1) if m else "unknown"
 
 
+@lru_cache(maxsize=4)
+def _available_langs(tessdata: str | None) -> frozenset[str] | None:
+    settings = get_settings()
+    try:
+        out = subprocess.run([settings.tesseract_bin, "--list-langs"], capture_output=True, timeout=10,
+                             env=_env(), check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    lines = (out.stdout + out.stderr).decode(errors="replace").splitlines()
+    return frozenset(line.strip() for line in lines[1:] if line.strip())
+
+
+def require_langs(lang: str) -> None:
+    """Модели языков `lang` («rus+eng») установлены. Без модели `rus` Tesseract не падает, а молча
+    читает кириллицу латиницей («Поставщик» → «MOCTaBIIIHK»), и такой текст попал бы в кеш OCR.
+    """
+    available = _available_langs(os.environ.get("TESSDATA_PREFIX"))
+    if available is None:
+        return  # нет бинарника — ошибку с причиной даст сам вызов распознавания
+    missing = [x for x in lang.split("+") if x and x not in available]
+    if missing:
+        raise OcrError(detail=f"нет модели Tesseract для языков: {', '.join(missing)}")
+
+
 def recognize(img: np.ndarray, *, lang: str, dpi: int, psm: int = 3, timeout: float = 60) -> list[TsvWord]:
     """Слова с рамками и уверенностью. `--psm 3`: `--psm 6` склеивает столбцы таблиц в одну строку."""
     # Не конфиг «tsv»: при своём TESSDATA_PREFIX каталога configs рядом может не быть

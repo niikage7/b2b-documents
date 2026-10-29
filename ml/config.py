@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-PIPELINE_VERSION = "2026.10.28-1"
+PIPELINE_VERSION = "2026.10.29-1"
 """Версия конвейера извлечения. Любая правка подготовки или чистки OCR увеличивает её,
 иначе кеш молча отдаст старое распознавание."""
 
@@ -92,6 +92,11 @@ class Settings:
 
     # Движок правил
     rules_per_group: int = field(default_factory=lambda: _env_int("RULES_PER_GROUP", 4))
+    # Второй взгляд: кандидат с уверенностью ниже порога перепроверяется коротким вызовом «одно правило —
+    # одна цитата». Ответ группы на пограничном условии колеблется от прогона к прогону даже при
+    # температуре 0; ложные находки были с уверенностью 0,6–0,8, а у уверенных (0,9) второй взгляд
+    # отклонял и верные (замер 29.10 в docs/ml-plan.md). 0 — выключить, 1 — проверять все
+    llm_verify_below: float = field(default_factory=lambda: _env_float("LLM_VERIFY_BELOW", 0.85))
     # Поиск фрагментов для semantic_llm (docs/ml-plan.md, «Поиск фрагментов 27.10»): фрагменты по
     # CHUNK_TOKENS (около одного пункта договора), гибрид векторов и BM25, каждому правилу — до
     # SEARCH_BUDGET_TOKENS текста. На стенде с рассыпанными пунктами: 0,99–1,00 пунктов с риском против 0,60.

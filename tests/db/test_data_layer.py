@@ -172,7 +172,7 @@ def test_user_findings(s, world):
     findings.delete_user_finding(s, f["id"], actor_id=user.id)
 
 
-def test_document_search_pages_and_exports(s, world):
+def test_document_search_pages_and_exports(s, world, tmp_path):
     doc_id = world["doc"].id
     found = documents.search_document(s, doc_id, "ПЕНЮ")
     assert found["matches"] and all(m["end"] - m["start"] == 4 for m in found["matches"])
@@ -183,6 +183,11 @@ def test_document_search_pages_and_exports(s, world):
     payload = exports.export_payload(s, doc_id)
     assert payload["document"]["kind"] == "docx"
     assert all(item["source_map"]["runs"] for item in payload["findings"])
+    # Карта runs из БД ложится на исходник: каждая находка подсвечена и с комментарием Word
+    from ml.export import annotate_docx
+
+    stats = annotate_docx(tmp_path / "contract.docx", payload["findings"], tmp_path / "marked.docx")
+    assert stats.placed == stats.comments == len(payload["findings"]) > 0 and not stats.missed
     summary = exports.batch_summary(s, world["batch_id"])
     assert summary["totals"]["name"] == "Закупка_0045" and summary["documents"][0]["worst_level"] == "Критично"
     assert summary["findings"][0]["status"] == "Новая" and summary["findings"][0]["section_number"]
@@ -274,8 +279,14 @@ def test_batch_passport(s, world):
                             "document_id": str(world["doc"].id), "block_id": world["blocks"][5].id, "start": 0,
                             "end": 5}]}
     event = pipeline.set_batch_passport(s, world["batch_id"], passport)
-    assert event["meta"]["passport"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
-    assert batches.batch_view(s, world["batch_id"])["meta"]["passport"][0]["key"] == "nmck"
+    assert event["meta"]["passport"]["fields"][0]["value"] == "4 850 000,00 руб." and event["meta"]["nmck"]
+    assert batches.batch_view(s, world["batch_id"])["meta"]["passport"]["fields"][0]["key"] == "nmck"
+    # Запрос о разъяснениях берёт заказчика и номер закупки из паспорта
+    pipeline.set_batch_passport(s, world["batch_id"], {"fields": [
+        {"key": "customer", "label": "Заказчик", "value": "ГКУ «Заказчик»"},
+        {"key": "number", "label": "Номер закупки", "value": "0338200009926000090"}]})
+    data = exports.clarification_input(s, world["batch_id"])
+    assert (data["customer"], data["procurement_number"]) == ("ГКУ «Заказчик»", "0338200009926000090")
 
 
 def test_clarification_input(s, world):

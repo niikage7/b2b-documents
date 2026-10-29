@@ -25,10 +25,10 @@ from contracts.extraction import BBox, OcrPage, OcrWord
 from ml.config import PIPELINE_VERSION, get_settings
 from ml.convert import file_sha256
 from ml.extract.pdf_extract import open_pdf
-from ml.ocr.correct import correct_words
+from ml.ocr.correct import correct_words, restore_one
 from ml.ocr.lines import pixel_lines, recover_missed_text, refine_detached_prefixes
 from ml.ocr.preprocess import Prepared, prepare_image, render
-from ml.ocr.tesseract import TsvWord, recognize, tesseract_version
+from ml.ocr.tesseract import TsvWord, recognize, require_langs, tesseract_version
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ def clean_words(words: list[TsvWord]) -> list[TsvWord]:
 def _page_result(no: int, width: float, height: float, prep: Prepared, words: list[TsvWord]) -> OcrPage:
     settings = get_settings()
     out: list[OcrWord] = []
+    restore_one(words)
     kept = clean_words(words)
     correct_words(kept)
     for w in kept:
@@ -144,6 +145,7 @@ def ocr_pages(
     if progress:
         progress(done, len(pages))
     if todo:
+        require_langs(lang)
         pool = workers or max(1, min(4, os.cpu_count() or 1))
         if images_dir is not None:
             images_dir.mkdir(parents=True, exist_ok=True)

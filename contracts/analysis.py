@@ -93,6 +93,13 @@ class LLMGroupResponse(BaseModel):
     rules: list[LLMRuleAnswer]
 
 
+class LLMVerdict(BaseModel):
+    """Второй взгляд на кандидата: одно правило, одна цитата с соседним текстом — только вердикт."""
+
+    check: str = Field("", description="Что сказано в условии и с каким порогом правила оно сравнивается")
+    risk: bool = Field(description="Условие нарушает именно это правило")
+
+
 # --- После привязки цитат -----------------------------------------------------------------
 
 
@@ -122,7 +129,7 @@ class DroppedFinding(BaseModel):
 
     rule_code: str
     quote: str
-    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk"]
+    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk", "not_confirmed"]
     best_score: float | None = None
 
 

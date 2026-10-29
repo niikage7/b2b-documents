@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import ml.ocr.lines as lines_mod
-from ml.ocr.correct import correct_words
+from ml.ocr.correct import correct_words, restore_one
 from ml.ocr.lines import recover_missed_text
 from ml.ocr.tesseract import TsvWord
 
@@ -48,6 +48,15 @@ def _fix(*texts: str) -> str:
 )
 def test_correct_words(before, after):
     assert _fix(*before) == after
+
+
+def test_one_before_numeral_in_brackets():
+    words = _line("в", "течение", "|", "(одного)", "рабочего", "дня", "|", "(одна)", "l", "(один)", "|", "день")
+    assert restore_one(words) == 3
+    assert " ".join(w.text for w in words) == "в течение 1 (одного) рабочего дня 1 (одна) 1 (один) | день"
+    # Черта в конце строки Tesseract и числительное на следующей — не трогаем
+    tail = _line("течение", "|") + [TsvWord(1, 1, 2, 0, 140, 80, 30, 0.9, "(одного)")]
+    assert restore_one(tail) == 0
 
 
 def test_sub_item_markers_follow_previous_marker():

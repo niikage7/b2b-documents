@@ -6,6 +6,7 @@
 - `risk_findings` (группа правил) — для каждого правила ищется предложение из его фрагментов, где
   больше всего слов из названия и сути риска (слова названия весят вдвое, число в предложении —
   плюс балл). Нашлось — находка с дословной цитатой, нет — «нет риска» (пустой список);
+- `finding_verdict` (второй взгляд на находку) — находка всегда подтверждается;
 - `batch_meta` — предмет закупки по строке «Наименование объекта закупки: …»;
 - `procurement_passport` — поля паспорта по ключевым словам («срок поставки», «обеспечение исполнения»);
 - `clarification_request` — по вопросу на каждую находку.
@@ -207,8 +208,14 @@ def clarification_request(prompt: str) -> dict:
 
 # --- Протокол OpenAI --------------------------------------------------------------------------
 
+def finding_verdict(prompt: str) -> dict:
+    """Второй взгляд на находку: заглушка подтверждает всё, что нашла сама."""
+    return {"check": "Условие подтверждено заглушкой", "risk": True}
+
+
 ANSWERS = {
     "risk_findings": risk_findings,
+    "finding_verdict": finding_verdict,
     "batch_meta": batch_meta,
     "procurement_passport": procurement_passport,
     "clarification_request": clarification_request,
@@ -222,6 +229,8 @@ def schema_name(body: dict, prompt: str) -> str | None:
     # Формат json_object или без формата: схема угадывается по тексту запроса
     if "Правила проверки:" in prompt:
         return "risk_findings"
+    if "Проверяемое условие:" in prompt:
+        return "finding_verdict"
     if "Поля паспорта:" in prompt:
         return "procurement_passport"
     if '"subject"' in prompt:

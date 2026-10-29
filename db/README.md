@@ -41,7 +41,7 @@ TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bi
 | `build_structure` | `ml.build_structure(result, document_id=...)` → `pipeline.save_blocks(s, doc_id, blocks)` | Блоки с разделами. id блоков детерминированы: повтор не трогает ручные пометки |
 | `index_chunks` | `pipeline.load_blocks` → `ml.index_chunks(blocks, document_id=...)` → `pipeline.save_chunks` | Фрагменты с эмбеддингами |
 | `extract_batch_meta` | `pipeline.set_batch_meta(s, batch_id, subject=, meta=)` | Предмет закупки; возвращает данные события `batch.meta` |
-| Паспорт закупки | `ml.extract_passport(...)` → `pipeline.set_batch_passport(s, batch_id, passport.model_dump())` | `batch.meta.passport`; задача может идти параллельно с анализом документов |
+| Паспорт закупки | `ml.extract_passport(...)` → `pipeline.set_batch_passport(s, batch_id, passport.model_dump())` | `batch.meta.passport = {"fields": [...]}` — форма `BatchMeta` фронтенда; задача может идти параллельно с анализом документов |
 | `analyze_document` | `pipeline.batch_rules(s, batch_id)` → `ml.group_rules` | Правила в версиях, зафиксированных на старте пакета |
 | `analyze_rule_group` | `ml.analyze_rule_group(pipeline.load_blocks(...), group, search=PgVectorSearch(conn), ...)` | Кандидаты в находки, БД не пишет |
 | `merge_findings` | `pipeline.merge_findings(s, doc_id, results)` | Находки ИИ документа заменяются, ручные остаются; документ `done`; возвращает `recalc` — данные события `document.done` |

@@ -50,14 +50,16 @@ def _fragment_of(prompt: str, quote: str) -> int | None:
 class FakeLLM:
     """Отвечает по плану: правило → список (цитата, пояснение). Цитата попадает в ответ,
     только если она есть в тексте запроса — как у честной модели. `safe` — условия, которые
-    модель проверила и вернула с вердиктом `risk=false`."""
+    модель проверила и вернула с вердиктом `risk=false`; `reject` — цитаты, которые второй взгляд
+    не подтверждает."""
 
     def __init__(self, plan: dict[str, list[tuple[str, str]]] | None = None, *, invent: dict | None = None,
                  safe: dict[str, list[str]] | None = None, delay: float = 0.0,
-                 passport: dict[str, tuple[str, str]] | None = None):
+                 passport: dict[str, tuple[str, str]] | None = None, reject: list[str] | None = None):
         self.plan = plan or {}
         self.invent = invent or {}
         self.safe = safe or {}
+        self.reject = reject or []
         self.passport = passport or {}
         self.delay = delay
         self.requests: list[dict] = []
@@ -76,6 +78,11 @@ class FakeLLM:
             n = len(re.findall(r"^\[(\d+)\]", prompt, re.M))
             items = [{"index": i, "request": f"Просим разъяснить условие {i}."} for i in range(1, n + 1)]
             return _ok(json.dumps({"items": items}, ensure_ascii=False))
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "finding_verdict":
+            m = re.search(r"Проверяемое условие: «(.*)»", prompt, re.S)
+            quote = m.group(1) if m else ""
+            risk = not any(r in quote or quote in r for r in self.reject)
+            return _ok(json.dumps({"check": "второй взгляд", "risk": risk}, ensure_ascii=False))
         if body.get("response_format", {}).get("json_schema", {}).get("name") == "procurement_passport":
             fields = [{"key": key, "value": value, "fragment": _fragment_of(prompt, quote), "quote": quote}
                       for key, (value, quote) in self.passport.items()]

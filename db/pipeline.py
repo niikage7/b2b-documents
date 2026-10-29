@@ -267,10 +267,12 @@ def set_batch_passport(s: Session, batch_id, passport: dict) -> dict:
     if batch is None:
         raise NotFound("Пакет не найден")
     meta = dict(batch.meta or {})
-    meta["passport"] = [f for f in passport.get("fields", [])]
+    fields = list(passport.get("fields", []))
+    # Форма `{"fields": [...]}` — как в `BatchMeta` фронтенда: карточка паспорта читает `meta.passport.fields`
+    meta["passport"] = {"fields": fields}
     batch.meta = meta
     if not batch.subject:
-        batch.subject = next((f["value"] for f in meta["passport"] if f.get("key") == "subject"), None)
+        batch.subject = next((f["value"] for f in fields if f.get("key") == "subject"), None)
     s.flush()
     return {"subject": batch.subject, "meta": batch.meta}
 
