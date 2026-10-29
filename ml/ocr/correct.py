@@ -13,6 +13,8 @@
 - Цифры 6, 0 и 3 внутри русского слова: «6ыть» → «быть», «py6.» → «руб.», «3аказчик» → «Заказчик».
 - «М» перед номером — латинская «N», которой в документах пишут знак номера: «М 44-ФЗ» → «N 44-ФЗ».
 - «44-03», «44-®3» → «44-ФЗ».
+- Цифра «1» перед числительным в скобках, прочитанная как «|», «l» или «I»: «в течение | (одного)
+  рабочего дня» → «1 (одного)». Вызывается до чистки (`restore_one`), иначе «|» уходит как обломок линии.
 """
 
 from __future__ import annotations
@@ -110,6 +112,23 @@ def _digits(text: str) -> str:
         elif ch == "3" and i == 0 and re.match(r"[а-яё]{2}", text[1:3]):
             chars[i] = "З"
     return "".join(chars)
+
+
+_ONE_TWINS = {"|", "l", "I", "[", "]", "!"}
+_ONE_WORD = re.compile(r"^\(одн|^\(один", re.IGNORECASE)
+
+
+def restore_one(words: list[TsvWord]) -> int:
+    """«| (одного)» → «1 (одного)»: в договорах число пишут цифрой и прописью, и одиночная «1»
+    у Tesseract часто выходит вертикальной чертой. Следующее слово — из той же строки Tesseract."""
+    changed = 0
+    for w, nxt in zip(words, words[1:], strict=False):
+        if (w.text in _ONE_TWINS and (w.block, w.par, w.line) == (nxt.block, nxt.par, nxt.line)
+                and _ONE_WORD.match(nxt.text)):
+            w.text = "1"
+            w.conf = max(w.conf, nxt.conf)
+            changed += 1
+    return changed
 
 
 def correct_words(words: list[TsvWord]) -> int:
