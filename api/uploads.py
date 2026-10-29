@@ -16,6 +16,7 @@ from typing import BinaryIO
 
 from ml.errors import UnsupportedFormatError
 from ml.files import check_file, sniff_kind
+from worker.archive import entry_name, is_service_entry, is_unsafe
 
 MAX_FILENAME = 500
 MAX_ARCHIVE_ENTRIES = 5000
@@ -49,29 +50,21 @@ def save_to_disk(src: BinaryIO, dest: Path) -> int:
     return dest.stat().st_size
 
 
-def _entry_name(info: zipfile.ZipInfo) -> str:
-    # Без флага UTF-8 Python читает имя как cp437, а русские архивы Windows пишут cp866
-    if info.flag_bits & 0x800:
-        return info.filename
-    try:
-        return info.filename.encode("cp437").decode("cp866")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return info.filename
-
-
 def archive_entries(path: Path, allowed: Iterable[str]) -> list[dict]:
-    """Оглавление zip без распаковки: путь, размер и результат проверки по расширению."""
-    ok_ext = {e for e in allowed if e != "zip"}
+    """Оглавление zip без распаковки: путь, размер и результат проверки по расширению.
+
+    Вложенный zip — `ok`: его содержимое распакует и проверит `unpack_batch`.
+    """
+    ok_ext = set(allowed)
     entries: list[dict] = []
     with zipfile.ZipFile(path) as zf:
         for info in zf.infolist():
-            name = _entry_name(info).replace("\\", "/")
-            if name.endswith("/") or name.startswith("__MACOSX/"):
+            name = entry_name(info)
+            if is_service_entry(name):
                 continue
             if len(entries) >= MAX_ARCHIVE_ENTRIES:
                 break
-            unsafe = name.startswith("/") or ".." in name.split("/") or (len(name) > 1 and name[1] == ":")
-            if unsafe or extension(name) not in ok_ext:
+            if is_unsafe(name) or extension(name) not in ok_ext:
                 check = "unsupported"
             elif info.flag_bits & 0x1:
                 check = "encrypted"

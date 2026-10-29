@@ -128,6 +128,7 @@ def test_zip_shows_contents_without_unpacking(world, client):
         "Закупка_0045/Контракт.pdf": pdf_bytes(),
         "Закупка_0045/Смета.xlsx": b"x",
         "Закупка_0045/../evil.pdf": pdf_bytes(),
+        "Закупка_0045/Приложения.zip": zip_bytes({"a.pdf": pdf_bytes()}),
         "__MACOSX/._x.pdf": b"x",
         "Закупка_0045/": b"",
     })
@@ -136,7 +137,7 @@ def test_zip_shows_contents_without_unpacking(world, client):
     assert f["check"] == "ok" and f["type_label"] == "ZIP"
     assert {e["path"]: e["check"] for e in f["archive_entries"]} == {
         "Закупка_0045/Контракт.pdf": "ok", "Закупка_0045/Смета.xlsx": "unsupported",
-        "Закупка_0045/../evil.pdf": "unsupported"}
+        "Закупка_0045/../evil.pdf": "unsupported", "Закупка_0045/Приложения.zip": "ok"}
     # Первый zip задаёт название пакета по умолчанию
     assert client.get(f"/api/batches/{draft}").json()["name"] == "Закупка_0045"
 
@@ -227,6 +228,26 @@ def test_start_queues_batch_and_calls_hook(world, client, hook_calls):
     assert upload(client, draft, ("c.pdf", pdf_bytes())).status_code == 409
     assert client.delete(f"/api/batches/{draft}/files/{uuid.uuid4()}").status_code == 409
     assert hook_calls == [("batch", draft)]
+
+
+def test_start_enqueues_pipeline(world, client, no_broker):
+    """Без подмены хука запуск доходит до постановки `unpack_batch` (здесь — без Redis)."""
+    draft = new_draft(client)
+    upload(client, draft, ("a.pdf", pdf_bytes()))
+    assert client.post(f"/api/batches/{draft}/start", json={"name": "Закупка"}).status_code == 202
+    assert no_broker == [("batch", draft)]
+
+
+def test_enqueue_failure_does_not_break_response(world, client, monkeypatch):
+    from worker import tasks
+
+    def broken(batch_id):
+        raise ConnectionError("redis недоступен")
+
+    monkeypatch.setattr(tasks, "process_batch", broken)
+    draft = new_draft(client)
+    upload(client, draft, ("a.pdf", pdf_bytes()))
+    assert client.post(f"/api/batches/{draft}/start", json={"name": "Закупка"}).status_code == 202
 
 
 def test_start_with_explicit_profile(world, client, s):

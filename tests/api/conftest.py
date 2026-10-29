@@ -26,6 +26,17 @@ def settings_env(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def no_broker(monkeypatch):
+    """Постановка задач без Redis: вызовы записываются, конвейер в тестах API не запускается."""
+    from worker import tasks
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(tasks, "process_batch", lambda batch_id: calls.append(("batch", batch_id)))
+    monkeypatch.setattr(tasks, "rerun_batch", lambda batch_id, ids: calls.append(("rerun", batch_id, list(ids))))
+    return calls
+
+
 @pytest.fixture
 def storage():
     from storage import MemoryStorage

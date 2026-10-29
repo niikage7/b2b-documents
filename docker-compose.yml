@@ -1,6 +1,6 @@
 # Светофор рисков: окружение целиком. Запуск: docker compose up --build
 # Значения берутся из .env (шаблон — .env.example); без .env подставляются безопасные для разработки.
-# Состав растёт по этапам: здесь БД, Redis, MinIO и API; воркеры, Flower и фронтенд добавляются позже.
+# Состав растёт по этапам: здесь БД, Redis, MinIO, API и воркеры Celery; Flower и фронтенд добавляются позже.
 
 name: b2b
 
@@ -8,6 +8,44 @@ x-healthcheck-defaults: &hc
   interval: 5s
   timeout: 5s
   retries: 20
+
+# Окружение воркеров: БД, брокер, MinIO и настройки ML. LLM конвейер пока не вызывает: адрес заглушки — этап 5
+x-worker-env: &worker-env
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-b2b}:${POSTGRES_PASSWORD:-b2b}@db:5432/${POSTGRES_DB:-b2b}
+  REDIS_URL: redis://redis:6379/0
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-b2b-minio}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-b2b-minio-secret}
+  MINIO_BUCKET: ${MINIO_BUCKET:-b2b-documents}
+  ML_MAX_PAGES: ${ML_MAX_PAGES:-500}
+  OCR_LANG: ${OCR_LANG:-rus+eng}
+  OCR_DPI: ${OCR_DPI:-300}
+  OCR_PAGES_PER_TASK: ${OCR_PAGES_PER_TASK:-5}
+  UNPACK_MAX_MB: ${UNPACK_MAX_MB:-500}
+  UNPACK_MAX_FILES: ${UNPACK_MAX_FILES:-500}
+  UNPACK_MAX_DEPTH: ${UNPACK_MAX_DEPTH:-3}
+  EMBEDDING_DEVICE: cpu
+
+x-worker: &worker
+  build:
+    context: .
+    dockerfile: worker/Dockerfile
+    additional_contexts:
+      ml: service:ml-base
+  image: b2b-worker:local
+  volumes:
+    - mlcache:/var/cache/b2b-ml
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+    # API при старте накатывает миграции: воркер начинает работу на готовой схеме
+    api:
+      condition: service_healthy
+  restart: unless-stopped
 
 services:
   db:
@@ -77,7 +115,33 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Базовый образ воркеров из ml/Dockerfile: только сборка, контейнер не запускается
+  ml-base:
+    build:
+      context: .
+      dockerfile: ml/Dockerfile
+    image: b2b-ml:local
+    deploy:
+      replicas: 0
+
+  # Очереди ingest, analysis и export: распаковка, извлечение текста, структура, фрагменты, анализ
+  worker:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_QUEUES: ingest,analysis,export
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+
+  # Очередь ocr: группы по 5 страниц скана; каждая задача распознаёт страницы в пуле до 4 потоков
+  worker-ocr:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_QUEUES: ocr
+      WORKER_CONCURRENCY: ${OCR_WORKER_CONCURRENCY:-2}
+
 volumes:
   pgdata:
   redisdata:
   miniodata:
+  mlcache:

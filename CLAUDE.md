@@ -4,7 +4,7 @@
 
 Проект делает команда из пяти человек для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов». Этап 1 — месяц удалённо, этап 2 — 48 часов очно с дополнительным заданием.
 
-На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд и API входа и пакетов (загрузка файлов, запуск, список; `/api/config`, `/api/healthz`) с docker-compose из четырёх сервисов (ветка `dev`); эндпоинты документов, находок и правил, очереди Celery и воркеры ещё впереди. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду».
+На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд, API (вход, пакеты и загрузка файлов, документы, ревью находок, правила и профили; `/api/config`, `/api/healthz`) и конвейер Celery от файла до блоков и фрагментов: распаковка архивов, извлечение текста, OCR сканов группами страниц (ветка `dev`). docker-compose поднимает шесть сервисов: db, redis, minio, api, worker, worker-ocr. Анализ по правилам в конвейере, прогресс по SSE и экспорт ещё впереди. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду».
 
 ## Код и команды
 
@@ -16,18 +16,19 @@
 | `bench/` | Стенды: генератор сканов, 1 − CER, сверка нумерации, выбор bi-encoder, сквозной прогон, модели решений против LLM; синтетический пакет с заложенными рисками, размеченные пункты (`clauses.py`) и разметка трёх открытых пакетов 44-ФЗ (`packages/`) |
 | `tests/` | pytest; эталонные снимки парсера — в `tests/snapshots/` |
 | `storage/` | Клиент MinIO, общий для API и воркеров; `MemoryStorage` для тестов |
+| `worker/` | Celery: приложение `worker.app:celery_app`, очереди `ingest`, `ocr`, `analysis`, `export`; задачи конвейера и их сигнатуры (контракт 3) — `worker/tasks.py`, безопасная распаковка zip — `worker/archive.py`, образ поверх `ml/Dockerfile` |
 | `api/` | FastAPI: приложение `api.app:create_app`, вход (JWT в httpOnly cookie), пакеты и загрузка файлов, единый формат ошибок, `Dockerfile` лёгкого образа; запуск и состав окружения — в `docker-compose.yml` |
 | `frontend/` | SPA на React + Vite: шесть экранов, клиент API, мок API с тем же контрактом; описание — в [frontend/README.md](frontend/README.md) |
 
 ```bash
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,api,dev]"
+uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,api,worker,dev]"
 .venv/bin/python -m pytest              # тесты OCR пропускаются без Tesseract rus+eng, тесты db — без TEST_DATABASE_URL
-.venv/bin/ruff check contracts ml bench tests db api
+.venv/bin/ruff check contracts ml bench tests db api worker storage
 .venv/bin/alembic -c db/alembic.ini upgrade head   # схема БД по DATABASE_URL
 
-docker compose up --build                # db, redis, minio, api: http://localhost:8000/api/docs; вход demo-пользователями, пароль из DEMO_PASSWORD (по умолчанию demo)
-TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bin/python -m pytest tests/api
+docker compose up --build                # db, redis, minio, api, worker, worker-ocr: http://localhost:8000/api/docs; вход demo-пользователями, пароль из DEMO_PASSWORD (по умолчанию demo)
+TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bin/python -m pytest tests/api tests/worker
 
 cd frontend && npm install
 npm run dev:mock                         # интерфейс на моке API: http://localhost:5173, пароль demo

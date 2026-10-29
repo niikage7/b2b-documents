@@ -16,11 +16,12 @@ COPY contracts ./contracts
 COPY ml ./ml
 COPY db ./db
 COPY storage ./storage
+COPY worker ./worker
 COPY api ./api
 # pymupdf 2.x тянет onnxruntime, networkx и pymupdf-layout для разметки страниц; check_file ими не пользуется
 RUN pip install ".[api,db]" \
     && pip uninstall -y onnxruntime pymupdf-layout pymupdf4llm networkx \
-    && python -c "import sys; from ml import check_file, validate_rule; import api.app, db.seed; \
+    && python -c "import sys; from ml import check_file, validate_rule; import api.app, db.seed, worker.tasks; \
 assert 'torch' not in sys.modules and 'cv2' not in sys.modules"
 
 RUN useradd --system --uid 10001 app
