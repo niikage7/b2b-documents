@@ -183,11 +183,14 @@ def test_document_search_pages_and_exports(s, world, tmp_path):
     payload = exports.export_payload(s, doc_id)
     assert payload["document"]["kind"] == "docx"
     assert all(item["source_map"]["runs"] for item in payload["findings"])
-    # Карта runs из БД ложится на исходник: каждая находка подсвечена и с комментарием Word
-    from ml.export import annotate_docx
+    # Карта runs из БД ложится на исходник: каждая находка размечена и с комментарием Word
+    from docx import Document
 
-    stats = annotate_docx(tmp_path / "contract.docx", payload["findings"], tmp_path / "marked.docx")
-    assert stats.placed == stats.comments == len(payload["findings"]) > 0 and not stats.missed
+    from worker.markup import mark_docx
+
+    marked = mark_docx(tmp_path / "contract.docx", payload["findings"], tmp_path / "marked.docx")
+    assert marked.placed == len(payload["findings"]) > 0 and not marked.skipped
+    assert len(list(Document(str(tmp_path / "marked.docx")).comments)) == marked.placed
     summary = exports.batch_summary(s, world["batch_id"])
     assert summary["totals"]["name"] == "Закупка_0045" and summary["documents"][0]["worst_level"] == "Критично"
     assert summary["findings"][0]["status"] == "Новая" and summary["findings"][0]["section_number"]

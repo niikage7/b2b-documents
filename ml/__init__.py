@@ -33,8 +33,6 @@ _EXPORTS = {
     "extract_passport": "ml.analysis.passport",
     "draft_clarification": "ml.analysis.clarification",
     "render_clarification_docx": "ml.analysis.clarification",
-    "annotate_docx": "ml.export",
-    "annotate_pdf": "ml.export",
     "load_default_checklist": "ml.checklist",
     "build_structure": "ml.structure",
     "build_chunks": "ml.structure",

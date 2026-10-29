@@ -95,7 +95,32 @@ def start_batch(files: list[Path], name: str) -> str:
                          "object_key": key, **inspect_file(path, path.name, ALLOWED_EXTENSIONS)})
         batches.add_files(s, batch_id, rows)
         batches.start_batch(s, batch_id, name=name)
-    return str(batch_id)
+        author_id = author.id
+    return str(batch_id), author_id
+
+
+def export_batch(batch_id: str, author_id, out_dir: Path) -> dict:
+    """Выгрузка пакета задачей `export_batch`: zip с размеченными документами и `Сводка.xlsx` → `out_dir`."""
+    import io
+    import zipfile
+
+    from db import exports
+    from worker import exports as export_tasks
+    from worker import runtime
+
+    with runtime.session_scope() as s:
+        job = exports.create_export(s, scope="batch", target_id=batch_id, actor_id=author_id)
+    export_tasks.export_batch.apply(args=(job["export_id"],)).get()
+    with runtime.session_scope() as s:
+        view = exports.export_view(s, job["export_id"])
+    if view["status"] != "done":
+        return {"status": view["status"], "error": view["error_message"]}
+    data = runtime.get_storage().get_bytes(view["object_key"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        zf.extractall(out_dir)
+        names = zf.namelist()
+    return {"status": "done", "files": names}
 
 
 def stage_seconds(batch_id: str) -> dict[str, float]:
@@ -133,7 +158,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="+", type=Path)
     ap.add_argument("--expected", type=Path, help="эталон {rule, doc, quote}; doc — имя файла без расширения")
-    ap.add_argument("--export", type=Path, help="каталог для размеченных документов (ml.annotate_*)")
+    ap.add_argument("--export", type=Path, help="каталог: выгрузка пакета задачей export_batch, zip распаковывается сюда")
     ap.add_argument("--json", type=Path, help="сохранить находки и замеры в JSON")
     ap.add_argument("--keep", action="store_true", help="не удалять базу прогона")
     args = ap.parse_args()
@@ -168,7 +193,7 @@ def run(args, url: str) -> None:
     runtime.get_events = lambda: bus
     eager_celery()
 
-    batch_id = start_batch(args.files, name="Сквозной прогон")
+    batch_id, author_id = start_batch(args.files, name="Сквозной прогон")
     started = time.perf_counter()
     tasks.unpack_batch.apply(args=(batch_id,)).get()
     wall = time.perf_counter() - started
@@ -194,20 +219,11 @@ def run(args, url: str) -> None:
                     | {"rule": (f["rule"] or {}).get("code")} for f in items],
                 "without_section": sum(1 for f in items if not f["section_number"] and not f["page"]),
             })
-            if args.export and items:
-                args.export.mkdir(parents=True, exist_ok=True)
-                key = payload["document"]["normalized_key"] or payload["document"]["object_key"]
-                src = args.export / f".src-{doc.id}{Path(key).suffix}"
-                memory.download(key, src)
-                out = args.export / f"{Path(doc.filename).stem}_разметка{Path(key).suffix}"
-                import ml
-
-                stats = (ml.annotate_docx if src.suffix == ".docx" else ml.annotate_pdf)(src, items, out)
-                src.unlink()
-                report["documents"][-1]["export"] = {"placed": stats.placed, "missed": stats.missed}
             assert len(rows) == len(items) or any(r.status == "rejected" for r in rows)
         report["usage"] = llm_usage(batch_id, documents)
         report["counters"] = view.get("counters")
+    if args.export:
+        report["export"] = export_batch(batch_id, author_id, args.export)
 
     print(f"Пакет: {report['status']}, {report['wall_seconds']} с от старта до finalize_batch (eager, по очереди)")
     print(f"Предмет закупки: {report['subject']}")
@@ -217,10 +233,12 @@ def run(args, url: str) -> None:
     print(f"Паспорт: {len(report['passport'])} полей — " + "; ".join(f"{p['label']}: {p['value']}" for p in report["passport"]))
     for d in report["documents"]:
         print(f"\n{d['filename']}: {d['status']}, стр. {d['pages']}, цвет {d['worst_level']}, находок {len(d['findings'])}"
-              + (f", ошибка: {d['error']}" if d["error"] else "") + (f", экспорт {d.get('export')}" if d.get("export") else ""))
+              + (f", ошибка: {d['error']}" if d["error"] else ""))
         for f in d["findings"]:
             where = f"п. {f['section_number']}" if f["section_number"] else f"стр. {f['page']}"
             print(f"  [{f['level']}] {f['rule']} {where}: «{f['quote'][:110]}»")
+    if report.get("export"):
+        print(f"\nВыгрузка пакета: {report['export']}")
     if args.expected:
         expected = json.loads(args.expected.read_text())
         scores = score(found, expected)

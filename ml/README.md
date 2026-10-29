@@ -22,8 +22,6 @@
 | Старт анализа | analysis | `ml.group_rules(rules)` | Группы по 3–4 правила для chord |
 | `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов. Поиск читает все фрагменты документа и сам ранжирует их гибридом векторов и BM25 |
 | Запрос о даче разъяснений | export | `ml.draft_clarification(findings, subject=, customer=, procurement_number=, law=)`, затем `draft.as_text()` или `ml.render_clarification_docx(draft, path, sender=)` | Письмо заказчику по находкам пакета: все вопросы в одном запросе, цитата и пункт — из находки, формулировку вопроса пишет LLM. Вход — `db.exports.clarification_input(s, batch_id, finding_ids=)` |
-| `export_document`, DOCX, DOC, RTF | export | `ml.annotate_docx(src, payload["findings"], out)` | Файл с заливкой цитат по уровню и комментарием Word к каждой находке (правило, раздел, объяснение, рекомендация, решение юриста); `ExportStats` — сколько находок легло и какие нет. Вход — `db.exports.export_payload(s, document_id)`; для DOC и RTF `src` — сконвертированный DOCX (`document.normalized_key`), по нему считалась карта runs |
-| `export_document`, PDF и скан | export | `ml.annotate_pdf(src, payload["findings"], out)` | Аннотации-подсветки со всплывающей заметкой по рамкам слов цитаты (у скана — слова OCR), без слов — по рамке блока |
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
 | Сид БД | — | `ml.load_default_checklist()` | Профиль «44-ФЗ, поставка товаров» и правила R-01…R-08 |
 
@@ -42,7 +40,6 @@
 | `extract/pdf_*.py`, `extract/layout.py` | Строки по геометрии, колонки XY-сечением, колонтитулы, знаки сносок, битый текстовый слой, номер пункта по шаблону, склейка абзаца через страницу |
 | `extract/page_classes.py` | Классы страниц `text`, `scan`, `mixed`, `curves`, `empty` (FR-3.4) |
 | `ocr/` | Края, ориентация, наклон, линии таблиц; Tesseract `--psm 3`; перечитывание оторванных номеров пунктов и дочитывание пропущенных значений в узких колонках; чистка; исправление типичных ошибок — римские номера разделов, «6)» вместо «б)», смесь кириллицы и латиницы, «44-ФЗ» (`correct.py`); уверенность страницы (FR-3.5); кеш с версией конвейера |
-| `export.py` | Разметка исходника находками: runs DOCX режутся по границам цитаты, заливка и комментарии Word; подсветки PDF по словам (FR-7.1, FR-7.2) |
 | `structure.py` | Блоки с разделами из сырых абзацев (FR-3.1, FR-4.2) и фрагменты для поиска |
 | `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки, паспорт закупки |
 | `checklist/` | Стартовый чек-лист R-01…R-08 |
@@ -67,7 +64,7 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Выбор bi-encoder и поиска | `python -m bench.embeddings model ... [--chunk-tokens 60,100,400]` | Доля пунктов с риском в фрагментах правила при бюджете токенов: векторный поиск, BM25, гибрид; скорость на CPU |
 | Поиск для паспорта | `python -m bench.passport [--budget 400,800] [--llm]` | Доля полей паспорта, значение которых попало во фрагменты запроса, на трёх открытых пакетах; с `--llm` — заполнение и сверка значений |
 | Сквозной прогон | `python -m bench.pipeline --pages 20 --scan` | Время этапов, находки, полнота и точность по правилам, токены и стоимость |
-| Сквозной прогон через конвейер | `TEST_DATABASE_URL=… python -m bench.e2e файлы… [--expected …] [--export каталог]` | Те же задачи, что в воркере (Celery в режиме eager, своя база PostgreSQL, хранилище в памяти): время этапов из `task_run`, находки с разделом, паспорт, сверка с эталоном, разметка экспорта |
+| Сквозной прогон через конвейер | `TEST_DATABASE_URL=… python -m bench.e2e файлы… [--expected …] [--export каталог]` | Те же задачи, что в воркере (Celery в режиме eager, своя база PostgreSQL, хранилище и события в памяти): время этапов из `task_run`, находки с разделом, паспорт, сверка с эталоном; с `--export` — выгрузка пакета задачей `export_batch` (zip и `Сводка.xlsx`) |
 | Рассуждения модели | `python -m bench.pipeline --pages 20 --reasoning default,low,none --repeat 3` | Время анализа, токены рассуждений, стоимость, полнота и точность в каждом режиме `LLM_REASONING`; без кеша LLM, режимы чередуются |
 | Модели решений и LLM | `python -m bench.decisions [--context 4] [--variant prompt,desc]` | Jev и Clef против LLM на размеченных пунктах `bench/clauses.py`: AUC, полнота и точность, доля пар для LLM без потерь, задержка, стоимость |
 | Снимки парсера | `UPDATE_SNAPSHOTS=1 pytest tests/ml/test_snapshots.py` | Обновить эталонные снимки после ожидаемого изменения разбора |
@@ -91,5 +88,5 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,dev]"
 | Влад | Контракт 2 ([`contracts/extraction.py`](../contracts/extraction.py)) — черновик: поля `RawParagraph`, карта runs и рамки слов |
 | Влад | `ocr_pages` возвращает только слова, абзацы собирает `build_pdf_result` после всех групп — это меняет контракт 3 |
 | Влад | Рамки в системе координат `page.get_text`: подсветка `add_highlight_annot` на странице с `/Rotate 90` проверена тестом |
-| Влад | Экспорт (FR-7.1, FR-7.2): задача `export_document` может звать `ml.annotate_docx` или `ml.annotate_pdf` с находками `db.exports.export_payload` — разрезание runs, заливка, комментарии Word и подсветки PDF уже сделаны и проверены на открытых пакетах; остаются MinIO, `finish_export` и событие `export.done` |
+| Влад | Разметка выгрузки (`worker/markup.py`) режет runs и ставит рамки по карте исходных позиций из `ml`: меняя `DocxRunSpan`, правила счёта смещений в `docx_reader` или систему координат рамок OCR, прогоните `tests/worker/test_markup_exact.py` — он сверяет заливку с цитатами посимвольно и рамки OCR на страницах с `/Rotate` |
 | Влад, фронтенд | Запрос о даче разъяснений: `ml.draft_clarification` и `db.exports.clarification_input` готовы, эндпоинта и кнопки нет |
