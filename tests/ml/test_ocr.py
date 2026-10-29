@@ -151,3 +151,13 @@ def test_orientation_falls_back_to_full_size(monkeypatch):
     found = pp.page_orientation(img, 300)
     assert seen == [((200, 150), 150), ((400, 300), 300)]
     assert found == Orientation(180, 12.0)
+
+
+def test_missing_language_model_fails_instead_of_latin(monkeypatch, tmp_path):
+    from ml.errors import OcrError
+    from ml.ocr import tesseract
+
+    monkeypatch.setattr(tesseract, "_available_langs", lambda _tessdata: frozenset({"eng", "osd"}))
+    with pytest.raises(OcrError, match="rus"):
+        tesseract.require_langs("rus+eng")
+    tesseract.require_langs("eng")

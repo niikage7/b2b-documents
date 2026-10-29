@@ -28,7 +28,7 @@ from ml.extract.pdf_extract import open_pdf
 from ml.ocr.correct import correct_words
 from ml.ocr.lines import pixel_lines, recover_missed_text, refine_detached_prefixes
 from ml.ocr.preprocess import Prepared, prepare_image, render
-from ml.ocr.tesseract import TsvWord, recognize, tesseract_version
+from ml.ocr.tesseract import TsvWord, recognize, require_langs, tesseract_version
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +144,7 @@ def ocr_pages(
     if progress:
         progress(done, len(pages))
     if todo:
+        require_langs(lang)
         pool = workers or max(1, min(4, os.cpu_count() or 1))
         if images_dir is not None:
             images_dir.mkdir(parents=True, exist_ok=True)
