@@ -173,6 +173,19 @@ def test_llm_failure_keeps_checks_without_llm():
     assert all(isinstance(f, PackageFinding) for f in result.findings)
 
 
+def test_all_checklists_are_valid():
+    from ml.analysis.templates import validate_rule
+    from ml.checklist import load_default_checklist, load_extra_checklists
+
+    profile, rules = load_extra_checklists()[0]
+    assert "223" in profile["name"] and not profile["is_default"]
+    assert [r.code for r in rules] == [r.code for r in load_default_checklist()[1]]
+    for rule in rules:
+        errors, warnings = validate_rule(rule)
+        assert errors == [] and warnings == [], rule.code
+        assert "44-ФЗ" not in rule.prompt_template and "контракт" not in rule.prompt_template.replace("контрактов", ""), rule.code
+
+
 def test_document_text_is_not_an_instruction():
     from ml.analysis.crosscheck import SYSTEM
 

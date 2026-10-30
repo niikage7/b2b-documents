@@ -1,4 +1,4 @@
-"""Начальные данные при первом запуске: профиль «44-ФЗ, поставка товаров», правила R-01…R-08, демо-пользователи.
+"""Начальные данные при первом запуске: профили «44-ФЗ, поставка товаров» и «223-ФЗ, поставка товаров», правила R-01…R-08, демо-пользователи.
 
     python -m db.seed            # после `alembic upgrade head`; повтор ничего не дублирует
 
@@ -28,7 +28,7 @@ DEMO_USERS = (
 
 def seed(s: Session, *, demo_password: str | None = None) -> dict:
     """Создаёт то, чего ещё нет. Возвращает, что добавлено."""
-    from ml.checklist import load_default_checklist
+    from ml.checklist import load_default_checklist, load_extra_checklists
 
     profile_data, rules = load_default_checklist()
     added = {"profile": False, "rules": 0, "users": 0}
@@ -39,6 +39,13 @@ def seed(s: Session, *, demo_password: str | None = None) -> dict:
         s.flush()
         added["profile"] = True
         added["rules"] = import_rules(s, profile.id, rules)
+    names = set(s.scalars(select(RuleProfile.name)))
+    for extra_data, extra_rules in load_extra_checklists():
+        if extra_data["name"] not in names:
+            extra = RuleProfile(name=extra_data["name"], short_name=extra_data["short_name"], is_default=False)
+            s.add(extra)
+            s.flush()
+            added["rules"] += import_rules(s, extra.id, extra_rules)
     password = demo_password if demo_password is not None else os.environ.get("DEMO_PASSWORD")
     if password:
         existing = set(s.scalars(select(User.login)))

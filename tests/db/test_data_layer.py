@@ -249,7 +249,7 @@ def test_rules_crud_and_versions(s, world):
 def test_seed_is_idempotent_and_auth(s):
     first = seed(s, demo_password="demo-pass")
     again = seed(s, demo_password="demo-pass")
-    assert first["rules"] == 8 and first["users"] == 3
+    assert first["rules"] == 16 and first["users"] == 3  # 44-ФЗ и 223-ФЗ
     assert again == {"profile": False, "rules": 0, "users": 0}
     user = users.authenticate(s, "Lawyer", "demo-pass")
     assert users.me(user)["role_label"] == "Юрист"

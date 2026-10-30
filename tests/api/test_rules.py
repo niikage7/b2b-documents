@@ -40,7 +40,9 @@ def test_profiles_visible_to_everyone_writes_to_methodologist(s, users, client, 
     seed(s)
     login(client, "specialist")
     profiles = client.get("/api/rule-profiles").json()
-    assert len(profiles) == 1 and profiles[0]["is_default"] and profiles[0]["enabled_rules_count"] == 8
+    assert len(profiles) == 2 and all(p["enabled_rules_count"] == 8 for p in profiles)
+    assert [p["is_default"] for p in sorted(profiles, key=lambda p: "223" in p["name"])] == [True, False]
+    profiles.sort(key=lambda p: not p["is_default"])
     assert client.get("/api/rules/system-variables").status_code == 200
     r = client.post("/api/rule-profiles", json={"name": "Новый", "short_name": "Н"})
     assert r.status_code == 403 and r.json()["error"]["message"] == "Правила доступны только методологу"
