@@ -5,8 +5,12 @@
 
 - `semantic_llm` — для каждого правила фрагменты документа в пределах бюджета токенов,
   отобранные гибридным поиском (`ml.analysis.search`) по строке «название + описание»;
-  фрагменты всех правил группы объединяются, один вызов LLM на группу;
-- `llm` — весь документ окнами около 6000 токенов, один вызов на окно и группу.
+- `llm` — весь документ окнами около 6000 токенов.
+
+Группа — единица задачи Celery; внутри неё в один вызов LLM идёт `LLM_RULES_PER_CALL` правил (по
+умолчанию одно), вызовы параллельны. С четырьмя правилами в вызове модель теряла условия среди соседей:
+на настоящих документах с внесёнными рисками 41 из 48 против 46 из 48 при той же стоимости входа —
+бюджет считается на правило (`bench.inject`, docs/ml-plan.md).
 
 Цитата из ответа привязывается к тексту блока; раздел и страницу находке даёт блок, а не
 ответ LLM. Ответ с вердиктом `risk=false` (условие проверено, риска нет) находкой не
@@ -139,6 +143,10 @@ def _window_calls(rules: list[RuleSpec], ordered: list[BlockLike], window_tokens
     return calls
 
 
+def _parts(rules: list[RuleSpec], size: int) -> list[list[RuleSpec]]:
+    return [rules[i : i + size] for i in range(0, len(rules), size)]
+
+
 def _norm_code(code: str) -> str:
     return _CODE.sub("", code).upper()
 
@@ -177,19 +185,21 @@ def analyze_rule_group(
     semantic = [r for r in active if r.kind == "semantic_llm"]
     whole = [r for r in active if r.kind == "llm"]
     calls: list[_Call] = []
-    call = None
-    if semantic and search is not None and document_id is not None:
-        call = _semantic_call(semantic, ordered, document_id=document_id, search=search,
-                              embedder=embedder, budget_tokens=budget_tokens)
-    if call is not None:
-        calls.append(call)
-    elif semantic:
-        # Нет поиска или индекс документа пуст: правила читают документ окнами, а не молчат
-        log.info("analysis: поиск фрагментов недоступен, правила %s читают документ окнами",
-                 ", ".join(r.code for r in semantic))
-        whole = semantic + whole
-    if whole:
-        calls.extend(_window_calls(whole, ordered, window_tokens))
+    per_call = max(1, settings.llm_rules_per_call)
+    for part in _parts(semantic, per_call):
+        call = None
+        if search is not None and document_id is not None:
+            call = _semantic_call(part, ordered, document_id=document_id, search=search,
+                                  embedder=embedder, budget_tokens=budget_tokens)
+        if call is not None:
+            calls.append(call)
+        else:
+            # Нет поиска или индекс документа пуст: правила читают документ окнами, а не молчат
+            log.info("analysis: поиск фрагментов недоступен, правила %s читают документ окнами",
+                     ", ".join(r.code for r in part))
+            whole = part + whole
+    for part in _parts(whole, per_call):
+        calls.extend(_window_calls(part, ordered, window_tokens))
 
     total = len(calls)
     done = 0

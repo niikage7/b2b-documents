@@ -135,7 +135,36 @@ def test_second_look_drops_unconfirmed(contract_blocks, verify_all):
     assert len(verdicts) == 2  # по вызову на кандидата
     prompt = verdicts[0]["messages"][-1]["content"]
     assert "Проверяемое условие: «" in prompt and "Текст документа" in prompt
-    assert result.usage.calls == 3
+    assert result.usage.calls == 4  # по вызову на правило и на кандидата
+
+
+def test_one_rule_per_llm_call_by_default(contract_blocks, search):
+    """Группа — единица задачи Celery, а в вызове LLM одно правило: с четырьмя модель теряла условия."""
+    _, rules = load_default_checklist()
+    semantic = [r for r in rules if r.kind == "semantic_llm"][:3]
+    fake = FakeLLM()
+    analyze_rule_group(contract_blocks, semantic, document_id="contract", search=search, llm=fake.client(),
+                       embedder=EMBEDDER)
+    assert len(fake.requests) == 3
+    prompts = [request["messages"][-1]["content"] for request in fake.requests]
+    for rule in semantic:  # вызовы идут параллельно, порядок запросов не задан
+        assert sum(f"### {rule.code}." in prompt for prompt in prompts) == 1
+
+
+def test_rules_per_call_setting(contract_blocks, search, monkeypatch):
+    from ml.config import get_settings
+
+    _, rules = load_default_checklist()
+    semantic = [r for r in rules if r.kind == "semantic_llm"][:4]
+    monkeypatch.setenv("LLM_RULES_PER_CALL", "4")
+    get_settings.cache_clear()
+    try:
+        fake = FakeLLM()
+        analyze_rule_group(contract_blocks, semantic, document_id="contract", search=search, llm=fake.client(),
+                           embedder=EMBEDDER)
+    finally:
+        get_settings.cache_clear()
+    assert len(fake.requests) == 1
 
 
 def test_second_look_failure_keeps_finding(contract_blocks, verify_all):

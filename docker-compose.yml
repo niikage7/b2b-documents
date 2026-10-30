@@ -47,6 +47,7 @@ x-worker-env: &worker-env
   # Второй взгляд: находка с уверенностью ниже порога перепроверяется коротким вызовом; 0 — выключить
   LLM_VERIFY_BELOW: ${LLM_VERIFY_BELOW:-0.85}
   RULES_PER_GROUP: ${RULES_PER_GROUP:-4}
+  LLM_RULES_PER_CALL: ${LLM_RULES_PER_CALL:-1}
   TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
   # Повторы временных ошибок этапа: всего попыток и база экспоненциальной паузы, с
   TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-3}
