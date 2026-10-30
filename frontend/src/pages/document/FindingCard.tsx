@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Check, ChevronDown, History, Pencil, Trash2, Undo2, X } from 'lucide-react';
 import { forwardRef, useState } from 'react';
+import { Link } from 'react-router';
 import { api } from '../../api/endpoints';
 import { keys } from '../../api/queries';
 import type { Finding, FindingPatch, Level } from '../../api/types';
 import { Button, Confidence, LevelBadge, Segmented, Spinner } from '../../components/ui';
 import { formatWhen } from '../../lib/format';
 import { FINDING_STATUS_LABELS, HISTORY_ACTION_LABELS, LEVEL_LABELS } from '../../lib/labels';
+import { refLink, refPlace } from '../BatchAssist';
 
 export type CardMode = 'compact' | 'summary' | 'expanded';
 
@@ -173,6 +175,18 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
           <b>Что сделать:</b> {f.recommendation}
         </p>
       )}
+      {f.related && f.related.length > 0 && (
+        <div className="fc__related">
+          <b>Другое значение в пакете:</b>
+          {f.related.map((ref, i) => (
+            <Link key={i} to={refLink(ref)}>
+              {ref.value ? `${ref.value} — ` : `«${ref.quote}» — `}
+              {refPlace(ref)}
+            </Link>
+          ))}
+        </div>
+      )}
+      {f.from_scan && <p className="fc__note">Текст распознан со скана: сверьте значения с оригиналом.</p>}
       {f.status === 'edited' && f.original_level !== f.level && (
         <p className="fc__note">Уровень изменён: было «{LEVEL_LABELS[f.original_level]}»</p>
       )}

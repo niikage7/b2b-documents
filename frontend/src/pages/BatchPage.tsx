@@ -11,10 +11,11 @@ import { Breadcrumbs, Button, Field, FileTypeIcon, FindingsBadges, LevelBadge, L
 import { formatDateTime } from '../lib/format';
 import { FINDING_STATUS_LABELS } from '../lib/labels';
 import { useExport } from '../lib/useExport';
+import { AskPanel, BriefCard, ClarificationButton } from './BatchAssist';
 import { documentMeta, isBatchRunning, lowQualityNote, useRetryDocument } from './ProcessingPage';
 
 type DocFilter = 'all' | 'ok' | 'warning' | 'critical';
-type Tab = 'documents' | 'findings';
+type Tab = 'documents' | 'findings' | 'ask';
 
 const FINDINGS_PAGE = 20;
 
@@ -324,13 +325,13 @@ export function BatchPage() {
   const exporter = useExport();
   const { retry, isPending: retrying } = useRetryDocument(batchId);
   const [filter, setFilter] = useState<DocFilter>('all');
-  const tab: Tab = sp.get('tab') === 'findings' ? 'findings' : 'documents';
+  const tab: Tab = sp.get('tab') === 'findings' ? 'findings' : sp.get('tab') === 'ask' ? 'ask' : 'documents';
   const ruleId = sp.get('rule') ?? '';
   const [dialog, setDialog] = useState<'rename' | 'delete' | 'rerun' | 'subject' | null>(null);
 
   const setTab = (next: Tab, rule?: string) => {
     const out = new URLSearchParams(sp);
-    if (next === 'findings') out.set('tab', 'findings');
+    if (next !== 'documents') out.set('tab', next);
     else out.delete('tab');
     if (rule !== undefined) {
       if (rule) out.set('rule', rule);
@@ -422,6 +423,7 @@ export function BatchPage() {
               {!exporter.isPending(`batch:${batch.id}`) && <Download size={18} />}
               Скачать пакет
             </Button>
+            <ClarificationButton pending={exporter.isPending(`clarification:${batch.id}`)} disabled={running || findingsTotal === 0} onClick={() => void exporter.downloadClarification(batch.id)} />
             <Menu
               trigger={(props) => (
                 <Button icon aria-label="Другие действия с пакетом" {...props}>
@@ -471,9 +473,14 @@ export function BatchPage() {
             <button type="button" role="tab" aria-selected={tab === 'findings'} className={tab === 'findings' ? 'tab tab--active' : 'tab'} onClick={() => setTab('findings')}>
               Все находки <span className="tab__count">· {findingsTotal}</span>
             </button>
+            <button type="button" role="tab" aria-selected={tab === 'ask'} className={tab === 'ask' ? 'tab tab--active' : 'tab'} onClick={() => setTab('ask')}>
+              Вопросы к документам
+            </button>
           </div>
           <div className="section-gap" style={{ marginTop: 16 }}>
-            {tab === 'documents' ? (
+            {tab === 'ask' ? (
+              <AskPanel batchId={batch.id} />
+            ) : tab === 'documents' ? (
               docs.length ? (
                 <ul className="doc-cards">
                   {docs.map((doc) => (
@@ -530,6 +537,7 @@ export function BatchPage() {
               <p className="muted side-card__hint">{running ? 'Появятся, когда документы будут проверены.' : 'Ни одно правило не сработало.'}</p>
             )}
           </section>
+          {!running && <BriefCard batch={batch} />}
           {passport.length > 0 && <PassportCard fields={passport} />}
           {batch.counters && batch.counters.errors > 0 && (
             <div className="note">

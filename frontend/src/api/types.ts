@@ -181,6 +181,7 @@ export interface PassportField {
 
 export interface BatchMeta {
   passport?: { fields: PassportField[] };
+  brief?: PackageBrief;
   [key: string]: unknown;
 }
 
@@ -240,6 +241,46 @@ export type FindingStatus = 'new' | 'accepted' | 'rejected' | 'edited';
 export type FindingSource = 'ai' | 'user';
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
 
+export interface FindingRef {
+  document_id: string;
+  filename?: string | null;
+  block_id: string;
+  start: number;
+  end: number;
+  quote: string;
+  value?: string | null;
+  page?: number | null;
+  section_number?: string | null;
+}
+
+export interface PackageAnswer {
+  found: boolean;
+  answer: string;
+  citations: FindingRef[];
+}
+
+export interface PackageBrief {
+  decision: 'go' | 'caution' | 'clarify';
+  decision_label: string;
+  summary: string;
+  top_risks: { finding_id?: string | null; document_id?: string | null; title: string; level: Level; document?: string | null; section_number?: string | null; page?: number | null; quote: string }[];
+  actions: string[];
+  not_checked: number;
+}
+
+export interface RuleDraft {
+  code: string;
+  title: string;
+  description: string;
+  level: Level;
+  kind: RuleInput['kind'];
+  prompt_template: string;
+  variables: RuleInput['variables'];
+  risk_example: string;
+  safe_example: string;
+  warnings: string[];
+}
+
 export interface Finding {
   id: string;
   document_id: string;
@@ -248,7 +289,13 @@ export interface Finding {
   status: FindingStatus;
   level: Level;
   original_level: Level;
-  rule: { id: string; code: string; title: string } | null;
+  /** У встроенной проверки пакета (`check_code`) id нет: правило нельзя открыть */
+  rule: { id: string | null; code: string; title: string } | null;
+  check_code?: string | null;
+  /** Другие места того же условия: второй документ противоречия */
+  related?: FindingRef[];
+  /** Текст распознан со скана: значения стоит сверить с оригиналом */
+  from_scan?: boolean;
   block_id: string;
   start: number;
   end: number;
@@ -450,6 +497,8 @@ export interface RuleTestFinding {
 export interface RuleTestResult {
   findings: RuleTestFinding[];
   duration_ms: number;
+  /** Что модель рассмотрела и почему не отметила */
+  considered?: { quote: string; reason: string; note?: string | null }[];
 }
 
 export interface RecentDocument {

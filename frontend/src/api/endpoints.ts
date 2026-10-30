@@ -17,10 +17,13 @@ import type {
   HistoryEvent,
   Me,
   NewUserFinding,
+  PackageAnswer,
+  PackageBrief,
   Page,
   Recalc,
   RecentDocument,
   Rule,
+  RuleDraft,
   RuleInput,
   RuleListItem,
   RuleProfile,
@@ -57,6 +60,11 @@ export const api = {
   rerunBatch: (batchId: string) => request<void>('POST', `/batches/${batchId}/rerun`),
   batchFindings: (batchId: string, params: BatchFindingsParams) =>
     request<Page<BatchFinding>>('GET', `/batches/${batchId}/findings`, { query: { ...params } }),
+
+  askBatch: (batchId: string, question: string) =>
+    request<PackageAnswer>('POST', `/batches/${batchId}/ask`, { body: { question } }),
+  batchBrief: (batchId: string) => request<PackageBrief>('POST', `/batches/${batchId}/brief`),
+  clarification: (batchId: string) => request<ExportJob>('POST', `/batches/${batchId}/clarification`),
 
   // Документы
   getDocument: (documentId: string) => request<DocumentView>('GET', `/documents/${documentId}`),
@@ -100,6 +108,7 @@ export const api = {
   updateRule: (ruleId: string, body: Partial<RuleInput> & { version: number }) =>
     request<Rule>('PATCH', `/rules/${ruleId}`, { body }),
   deleteRule: (ruleId: string) => request<void>('DELETE', `/rules/${ruleId}`),
+  draftRule: (body: { description: string; profile_id?: string }) => request<RuleDraft>('POST', '/rules/draft', { body }),
   systemVariables: () => request<SystemVariable[]>('GET', '/rules/system-variables'),
   testRule: (body: { rule: RuleInput; document_id?: string; text?: string }, signal?: AbortSignal) =>
     request<RuleTestResult>('POST', '/rules/test', { body, signal }),

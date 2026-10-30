@@ -529,6 +529,44 @@ export function createMockTransport(): MockTransport {
     setTimeout(() => emit(batchId, { type: 'export.done', data: { ...exportStatus(exp.id), export_id: exp.id } }), 1900);
     return [202, { export_id: exp.id, format: 'txt' }];
   };
+  route('POST', '/batches/:id/clarification', (ctx) => createExport('batch', getBatch(ctx.params.id).id));
+  route('POST', '/batches/:id/ask', async (ctx) => {
+    const batch = getBatch(ctx.params.id);
+    const question = String(ctx.body.question ?? '').trim();
+    if (!question) throw validation({ question: 'Напишите вопрос' });
+    await new Promise((r) => setTimeout(r, 700));
+    const words = question.toLowerCase().match(/[а-яё]{4,}/g)?.map((w) => w.slice(0, 5)) ?? [];
+    const docs = state.documents.filter((d) => d.batch_id === batch.id);
+    const scored = state.blocks
+      .filter((b) => docs.some((d) => d.id === b.document_id))
+      .map((b) => ({ b, score: words.filter((w) => b.text.toLowerCase().includes(w)).length }))
+      .sort((x, y) => y.score - x.score);
+    const best = scored[0];
+    if (!best?.score) return { found: false, answer: 'В документах пакета ответа на этот вопрос нет.', citations: [] };
+    const doc = docs.find((d) => d.id === best.b.document_id);
+    const quote = best.b.text.slice(0, 200);
+    return {
+      found: true,
+      answer: `Ответ мока API, модель не вызывалась: ${quote}`,
+      citations: [{ document_id: best.b.document_id, filename: doc?.filename, block_id: best.b.id, start: 0, end: quote.length, quote, page: best.b.page, section_number: best.b.section_number ?? best.b.number }],
+    };
+  });
+  route('POST', '/batches/:id/brief', (ctx) => {
+    const batch = getBatch(ctx.params.id);
+    const active = state.findings.filter((f) => f.batch_id === batch.id && f.status !== 'rejected');
+    const decision = active.some((f) => f.level === 'critical') ? 'clarify' : active.length ? 'caution' : 'go';
+    const brief = {
+      decision,
+      decision_label: { go: 'Существенных рисков не найдено', caution: 'Можно участвовать, учитывая риски', clarify: 'Сначала снять критичные риски' }[decision],
+      summary: `Вывод мока API, модель не вызывалась: активных находок — ${active.length}.`,
+      top_risks: [],
+      actions: active.length ? ['Направить заказчику запрос о даче разъяснений по критичным условиям.'] : [],
+      not_checked: 0,
+    };
+    batch.meta = { ...(batch.meta ?? {}), brief } as typeof batch.meta;
+    persist();
+    return brief;
+  });
   route('POST', '/documents/:id/exports', (ctx) => createExport('document', getDoc(ctx.params.id).id));
   route('POST', '/batches/:id/exports', (ctx) => createExport('batch', getBatch(ctx.params.id).id));
   route('GET', '/exports/:id', (ctx) => exportStatus(ctx.params.id));
@@ -665,6 +703,17 @@ export function createMockTransport(): MockTransport {
     rule.enabled = false;
     persist();
     return [204];
+  });
+  route('POST', '/rules/draft', async (ctx) => {
+    requireMethodologist(ctx);
+    const description = String(ctx.body.description ?? '').trim();
+    if (description.length < 10) throw validation({ description: 'Опишите риск хотя бы одним предложением' });
+    await new Promise((r) => setTimeout(r, 500));
+    return {
+      code: 'R-09', title: description.slice(0, 80), description, level: 'warning', kind: 'semantic_llm',
+      prompt_template: `Проверь {фрагмент}: найди условия о том, что описано так: ${description}. Риск — только если условие прямо это предусматривает. Не риск: условия о другом.`,
+      variables: [], risk_example: description, safe_example: '', warnings: [],
+    };
   });
   route('POST', '/rules/test', async (ctx) => {
     requireMethodologist(ctx);

@@ -8,6 +8,7 @@ import { safeNext } from '../pages/LoginPage';
 import { QueryClient } from '@tanstack/react-query';
 import { applyBatchEvent, keys } from '../api/queries';
 import type { BatchView, DocumentCard, DocumentProgressEvent } from '../api/types';
+import { refLink, refPlace } from '../pages/BatchAssist';
 import { findingLink, sortDocuments } from '../pages/BatchPage';
 import { isBatchRunning, lowQualityNote } from '../pages/ProcessingPage';
 
@@ -248,5 +249,18 @@ describe('isBatchRunning', () => {
 describe('findingLink', () => {
   it('формирует ссылку на документ с параметром finding', () => {
     expect(findingLink('doc-123', 'f-456')).toBe('/documents/doc-123?finding=f-456');
+  });
+});
+
+describe('ссылки на место в пакете', () => {
+  const ref = { document_id: 'd', block_id: 'b', start: 3, end: 9, quote: 'срок', filename: 'ТЗ.docx', section_number: '4.1', page: 2 };
+
+  it('открывает документ на цитате', () => {
+    expect(refLink(ref)).toBe('/documents/d?block=b&start=3&end=9');
+  });
+
+  it('показывает файл, пункт и страницу, пропуская пустое', () => {
+    expect(refPlace(ref)).toBe('ТЗ.docx, п. 4.1, стр. 2');
+    expect(refPlace({ filename: 'ТЗ.docx', section_number: null, page: null })).toBe('ТЗ.docx');
   });
 });

@@ -55,5 +55,6 @@ export function useExport() {
     isPending: (key: string) => pending.has(key),
     downloadDocument: (documentId: string) => run(`document:${documentId}`, () => api.exportDocument(documentId)),
     downloadBatch: (batchId: string) => run(`batch:${batchId}`, () => api.exportBatch(batchId)),
+    downloadClarification: (batchId: string) => run(`clarification:${batchId}`, () => api.clarification(batchId)),
   };
 }

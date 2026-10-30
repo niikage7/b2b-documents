@@ -1,10 +1,10 @@
-import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronUp, Info, Plus, Trash2, X } from 'lucide-react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronUp, Info, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/endpoints';
 import { ApiError } from '../../api/http';
 import { keys } from '../../api/queries';
-import type { Level, Rule, RuleInput, RuleKind, RuleTestResult, RuleVariable, VariableType } from '../../api/types';
+import type { Level, Rule, RuleDraft, RuleInput, RuleKind, RuleTestResult, RuleVariable, VariableType } from '../../api/types';
 import { errorMessage } from '../../components/feedback';
 import { Button, Confidence, Field, LevelBadge, Segmented, Spinner } from '../../components/ui';
 import { formatDate } from '../../lib/format';
@@ -48,7 +48,42 @@ function Quote({ text, level }: { text: string; level?: Level }) {
   return <span className={`rule-test__quote rule-test__quote--${level ?? 'critical'}`}>«{text}»</span>;
 }
 
-function TestPanel({ draft }: { draft: RuleInput }) {
+/** Черновик правила из описания риска своими словами: заполняет форму, сохраняет методолог. */
+function DraftPanel({ profileId, onDraft }: { profileId?: string; onDraft: (draft: RuleDraft) => void }) {
+  const [description, setDescription] = useState('');
+  const make = useMutation({
+    mutationFn: () => api.draftRule({ description, profile_id: profileId }),
+    onSuccess: (draft) => {
+      onDraft(draft);
+      setDescription('');
+    },
+  });
+  return (
+    <div className="rule-draft">
+      <label htmlFor="rule-draft-text">
+        <b>Описать риск своими словами</b>
+      </label>
+      <textarea
+        id="rule-draft-text"
+        className="textarea"
+        rows={3}
+        value={description}
+        maxLength={2000}
+        placeholder="Например: заказчик требует страховать товар за счёт поставщика на сумму больше цены контракта"
+        onChange={(e) => setDescription(e.target.value)}
+      />
+      {make.isError && <div className="field__error">{errorMessage(make.error)}</div>}
+      <div>
+        <Button type="button" size="sm" loading={make.isPending} disabled={description.trim().length < 10} onClick={() => make.mutate()}>
+          {!make.isPending && <Sparkles size={16} />}
+          Заполнить форму с помощью ИИ
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function TestPanel({ draft, sample }: { draft: RuleInput; sample?: string }) {
   const recent = useQuery({ queryKey: keys.recentDocuments, queryFn: api.recentDocuments, staleTime: 30_000 });
   const [mode, setMode] = useState<'document' | 'text'>('document');
   const [documentId, setDocumentId] = useState('');
@@ -60,6 +95,14 @@ function TestPanel({ draft }: { draft: RuleInput }) {
   useEffect(() => {
     if (!documentId && recent.data?.length) setDocumentId(recent.data[0].id);
   }, [recent.data, documentId]);
+
+  // Пример риска из черновика правила: тест можно запустить сразу
+  useEffect(() => {
+    if (sample) {
+      setText(sample);
+      setMode('text');
+    }
+  }, [sample]);
 
   useEffect(() => {
     if (state.status !== 'running') return;
@@ -167,6 +210,22 @@ function TestPanel({ draft }: { draft: RuleInput }) {
         ) : (
           <div className="muted">Ничего не найдено: на этом тексте правило не сработает.</div>
         ))}
+      {state.status === 'done' && !!state.result.considered?.length && (
+        <details className="rule-test__considered">
+          <summary>Модель рассмотрела и не отметила: {state.result.considered.length}</summary>
+          <ul>
+            {state.result.considered.map((c, i) => (
+              <li key={i}>
+                <Quote text={c.quote} />
+                <div className="subtle">
+                  {c.reason}
+                  {c.note && `: ${c.note}`}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }
@@ -187,6 +246,7 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
   const systemVars = useQuery({ queryKey: keys.systemVariables, queryFn: api.systemVariables, staleTime: Infinity });
   const [showVars, setShowVars] = useState(false);
   const [touched, setTouched] = useState(false);
+  const [sample, setSample] = useState<string>();
   const templateRef = useRef<HTMLTextAreaElement>(null);
   const check = useMemo(() => validateRule(draft), [draft]);
   const errors = { ...(touched ? check.fields : {}), ...serverErrors };
@@ -239,6 +299,16 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
           save();
         }}
       >
+        {!rule && (
+          <DraftPanel
+            profileId={draft.profile_id}
+            onDraft={(d) => {
+              onChange({ ...draft, code: d.code, title: d.title, description: d.description, level: d.level, kind: d.kind, prompt_template: d.prompt_template, variables: d.variables });
+              setSample(d.risk_example);
+              if (d.variables.length) setShowVars(true);
+            }}
+          />
+        )}
         <div className="rule-editor__row">
           <Field label="Код" htmlFor="rule-code" error={errors.code}>
             <input id="rule-code" className={errors.code ? 'input input--error mono' : 'input mono'} value={draft.code} placeholder="R-09" onChange={(e) => set('code', e.target.value)} maxLength={20} />
@@ -396,7 +466,7 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
           </div>
         )}
 
-        <TestPanel draft={draft} />
+        <TestPanel draft={draft} sample={sample} />
 
         <p className="note rule-editor__notice">
           <Info size={16} />

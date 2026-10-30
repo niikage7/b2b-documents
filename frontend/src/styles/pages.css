@@ -578,3 +578,29 @@
 .spin {
   animation: spin 1.2s linear infinite;
 }
+
+/* Вопросы к пакету и вывод для руководителя */
+.ask__form { display: flex; gap: 8px; }
+.ask__form .input { flex: 1; }
+.ask__suggested { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--border, #d9dde3); background: transparent; border-radius: 16px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.chip:hover { background: var(--surface-hover, #f2f4f7); }
+.ask__item { border-top: 1px solid var(--border, #d9dde3); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.ask__question { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.ask__answer { margin: 0; }
+.ask__citation { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-left: 3px solid var(--border, #d9dde3); color: inherit; text-decoration: none; font-size: 13px; }
+.ask__citation:hover { background: var(--surface-hover, #f2f4f7); }
+.ask__quote { font-style: italic; }
+.brief { display: flex; flex-direction: column; gap: 8px; font-size: 14px; margin-bottom: 10px; }
+.brief p { margin: 0; }
+.brief__decision { font-weight: 600; padding: 6px 10px; border-radius: 6px; }
+.brief__decision--ok { background: #e6f4ea; color: #1e6b34; }
+.brief__decision--warning { background: #fff4d6; color: #7a5700; }
+.brief__decision--critical { background: #fde7e7; color: #a11d1d; }
+.brief__risks, .brief__actions { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.brief__risks { list-style: none; padding-left: 0; }
+.fc__related { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.fc__related a { color: inherit; }
+.rule-draft { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px dashed var(--border, #d9dde3); border-radius: 8px; }
+.rule-test__considered summary { cursor: pointer; }
+.rule-test__considered li { margin-top: 6px; }
