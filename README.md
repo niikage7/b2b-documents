@@ -175,6 +175,24 @@ curl -b cookies.txt http://localhost:8000/api/rules
 
 Полный список эндпоинтов и схемы ответов — http://localhost:8000/api/docs.
 
+### Вопрос к документам, вывод, запрос о разъяснениях, черновик правила
+
+```bash
+# Ответ только из документов пакета, с цитатами; found=false — в документах ответа нет
+curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/ask \
+  -H 'Content-Type: application/json' -d '{"question": "Какой срок поставки?"}'
+
+# Вывод для руководителя по находкам после ревью
+curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/brief
+
+# Запрос о даче разъяснений заказчику: 202 и export_id, файл — как у выгрузки
+curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/clarification
+
+# Черновик правила из описания риска, только методолог; ничего не сохраняет
+curl -b cookies.txt -X POST http://localhost:8000/api/rules/draft \
+  -H 'Content-Type: application/json' -d '{"description": "Заказчик требует страховать товар за счёт поставщика"}'
+```
+
 ## Документация
 
 | Документ | Что внутри |

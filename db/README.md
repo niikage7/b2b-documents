@@ -78,6 +78,7 @@ TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bi
 | Экспорт | `exports.create_export`, `exports.finish_export`, `exports.export_view`; данные — `exports.export_payload(s, doc_id)` и `exports.batch_summary(s, batch_id)` |
 | Профили | `rules.list_profiles`, `create_profile`, `update_profile`, `delete_profile` |
 | Правила | `rules.list_rules`, `get_rule`, `create_rule`, `update_rule(s, id, data, version=)`, `delete_rule`, `system_variables` |
+| Находки проверок пакета | `pipeline.save_package_findings(s, batch_id, findings)`: код проверки вместо правила (`finding.check_code`), ссылки на другие места (`finding.related`); решение юриста переживает повторный анализ |
 | Запрос о даче разъяснений | `exports.clarification_input(s, batch_id, finding_ids=)` → `ml.draft_clarification(**data)` → `draft.as_text()` или `ml.render_clarification_docx` |
 | Очистка черновиков | `batches.expired_drafts(s)` — черновики старше 24 часов и ключи их файлов |
 
@@ -93,4 +94,5 @@ TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bi
 | `block.stream`, `block.page_end` | Сноски не образуют разделов; абзац может перейти на следующую страницу |
 | У `chunk` нет индекса HNSW | Поиск идёт внутри одного документа: фрагменты читаются целиком и ранжируются гибридом векторов и BM25 в `ml.analysis.search` |
 | `chunk.char_start`, `chunk.char_end` (миграция 0002) | Блок длиннее 300 токенов — ячейка таблицы с порядком подачи заявки — режется для поиска на окна по предложениям; поля хранят смещения окна в тексте блока, LLM получает только найденные окна. У фрагмента из целых блоков оба поля пустые |
+| `finding.check_code`, `check_title`, `related` (миграция 0003) | Находка встроенной проверки пакета, а не правила; ссылки на другие места того же условия вместо отдельной таблицы `FindingRef` |
 | `finding_event.actor_id` может быть пустым | События, которые записала система (находки ИИ); в истории показывается «ИИ» |
