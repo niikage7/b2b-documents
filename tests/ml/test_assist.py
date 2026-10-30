@@ -57,6 +57,12 @@ def test_ask_hides_answer_without_real_citation():
     assert not result.found and result.answer == NOT_FOUND and result.citations == []
 
 
+def test_ask_hides_fragment_numbers():
+    answer = "Срок — 7 рабочих дней (фрагменты 1, 8 и 21). Это указано во фрагменте 3."
+    result, _ = _ask({"found": True, "answer": answer, "citations": [{"fragment": 1, "quote": QUOTE}]})
+    assert result.answer == "Срок — 7 рабочих дней. Это указано."
+
+
 def test_ask_not_found():
     result, _ = _ask({"found": False, "answer": "", "citations": []})
     assert not result.found and result.answer == NOT_FOUND
@@ -105,9 +111,19 @@ GOOD_RULE = {
 
 
 def test_draft_rule_passes_validation():
-    client, _ = _reply(GOOD_RULE)
+    client, requests = _reply(GOOD_RULE)
     draft = draft_rule("Заказчик платит слишком поздно", llm=client)
+    assert '"title"' in requests[0]["messages"][-1]["content"]
     assert draft.kind == "semantic_llm" and draft.variables[0].name == "порог" and draft.risk_example
+
+
+def test_strict_schema_keeps_fields_named_like_service_keys():
+    from ml.analysis.llm import _strict_schema
+    from ml.analysis.rule_draft import _Draft
+
+    schema = _strict_schema(_Draft.model_json_schema())
+    assert {"title", "description"} <= set(schema["properties"]) and {"title", "description"} <= set(schema["required"])
+    assert "title" not in schema and "title" not in schema["properties"]["title"]
 
 
 def test_draft_rule_repairs_template_once():

@@ -53,6 +53,11 @@ SYSTEM = """Ты — методолог закупок по 44-ФЗ и 223-ФЗ 
 Ответ — только JSON по заданной схеме."""
 
 
+_SHAPE = ("Верни JSON со всеми полями: {\"title\": \"...\", \"description\": \"...\", \"level\": \"warning\", "
+          "\"prompt_template\": \"Проверь {фрагмент}: ...\", \"variables\": [{\"name\": \"порог\", \"type\": \"number\", "
+          "\"value\": \"10\"}], \"risk_example\": \"...\", \"safe_example\": \"...\"}.")
+
+
 def _spec(draft: _Draft) -> RuleSpec:
     variables = [RuleVariable(name=v.name.strip(), type=v.type if v.type in ("text", "number", "list") else "text",
                               value=v.value) for v in draft.variables]
@@ -65,7 +70,7 @@ def draft_rule(description: str, *, llm: LLMClient | None = None) -> RuleDraftRe
     """Черновик правила; инструкция с ошибкой отправляется модели на исправление один раз."""
     client = llm or default_client()
     messages = [{"role": "system", "content": SYSTEM},
-                {"role": "user", "content": f"Описание риска: {description.strip()[:MAX_DESCRIPTION]}\n\nВерни JSON по схеме."}]
+                {"role": "user", "content": f"Описание риска: {description.strip()[:MAX_DESCRIPTION]}\n\n{_SHAPE}"}]
     usage = None
     for attempt in range(2):
         answer = client.chat(messages, _Draft, schema_name="rule_draft", max_tokens=1500, reasoning="none")

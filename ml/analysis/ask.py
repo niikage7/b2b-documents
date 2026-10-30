@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
@@ -27,6 +28,8 @@ MAX_CITATIONS = 5
 DOCUMENT_BUDGET_TOKENS = 700
 ANSWER_TOKENS = 700
 NOT_FOUND = "В документах пакета ответа на этот вопрос нет."
+# Номера фрагментов — внутренняя разметка запроса; модель иногда пишет их в ответ и с запретом в промпте
+_FRAGMENT_REF = re.compile(r"\s*\(?\b(?:во?\s+|из\s+)?фрагмент\w*\s*\[?\d+\]?(?:\s*(?:,|и)\s*\[?\d+\]?)*\)?", re.I)
 
 
 class _Citation(BaseModel):
@@ -47,7 +50,7 @@ SYSTEM = """Ты помогаешь тендерному специалисту 
 Правила:
 1. Отвечай коротко, 1–4 предложения, с конкретными значениями: суммами, сроками, номерами пунктов. Если значения в разных документах расходятся, скажи об этом.
 2. Опирайся только на фрагменты. Не добавляй сведений из закона или из общей практики, которых нет в тексте.
-3. citations — дословные непрерывные отрывки 5–300 символов, символ в символ, на которых основан ответ, и номер фрагмента.
+3. В тексте ответа не упоминай номера фрагментов: пользователь их не видит, ссылайся на документ и пункт. citations — дословные непрерывные отрывки 5–300 символов, символ в символ, на которых основан ответ, и номер фрагмента.
 4. Если во фрагментах ответа нет, верни found=false, пустой answer и пустой citations. Не угадывай.
 
 Ответ — только JSON по заданной схеме."""
@@ -97,5 +100,5 @@ def ask_package(
         if reply.data.found:
             log.info("ask: ответ без цитат в тексте не показан: %.120s", reply.data.answer)
         return PackageAnswer(found=False, answer=NOT_FOUND, usage=reply.usage)
-    return PackageAnswer(found=True, answer=reply.data.answer.strip(), citations=citations[:MAX_CITATIONS],
+    return PackageAnswer(found=True, answer=_FRAGMENT_REF.sub("", reply.data.answer).strip(), citations=citations[:MAX_CITATIONS],
                          usage=reply.usage)

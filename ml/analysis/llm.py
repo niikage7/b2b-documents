@@ -74,8 +74,12 @@ def _strict_schema(schema: dict) -> dict:
         if isinstance(node, dict):
             if "$ref" in node:
                 return fix(dict(defs[node["$ref"].split("/")[-1]]))
+            original_properties = node.get("properties", {})
             drop = ("title", "default", "description", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
             node = {k: fix(v) for k, v in node.items() if k not in drop}
+            if "properties" in node:
+                # Служебные ключи убираются из описаний, а не из имён полей: поле может называться title
+                node["properties"] = {k: fix(v) for k, v in original_properties.items()}
             if node.get("type") == "object":
                 node["required"] = list(node.get("properties", {}))
                 node["additionalProperties"] = False
