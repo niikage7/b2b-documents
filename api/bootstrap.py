@@ -16,6 +16,7 @@ import db
 from db.config import database_url
 from db.seed import seed
 from db.session import session_scope
+from worker import jsonlog
 
 log = logging.getLogger("api.bootstrap")
 
@@ -36,17 +37,18 @@ def migrate(*, attempts: int = 30, delay: float = 2.0) -> None:
             log.warning("БД недоступна (%s), попытка %d из %d", exc.__class__.__name__, attempt, attempts)
             time.sleep(delay)
     engine.dispose()
-    cfg = Config(str(Path(db.__file__).parent / "alembic.ini"))
+    # Настройки из db/alembic.ini, но без его секции журнала: env.py вызывает fileConfig только при
+    # config_file_name, а журнал контейнера API уже настроен (`worker.jsonlog`, LOG_FORMAT=json)
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(db.__file__).parent / "migrations"))
+    cfg.set_main_option("path_separator", "os")
     cfg.attributes["url"] = database_url()
     command.upgrade(cfg, "head")
 
 
 def main() -> None:
+    jsonlog.configure("api")
     migrate()
-    # Alembic перенастраивает логирование по alembic.ini и отключает уже созданные логгеры;
-    # возвращаем своё и включаем логгер заново, иначе итог сида не виден
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True)
-    log.disabled = False
     with session_scope() as s:
         added = seed(s)
     log.info("Сид: профиль %s, правил добавлено %d, пользователей %d",

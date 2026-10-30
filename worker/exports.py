@@ -34,7 +34,7 @@ from sqlalchemy import select
 from db import exports
 from db.models import Batch, Document, Export
 from db.pipeline import as_uuid
-from worker import events, runtime
+from worker import events, jsonlog, runtime
 from worker.app import celery_app
 from worker.tasks import DOCX_MIME, MAX_ATTEMPTS, is_retryable, retry_delay
 
@@ -121,6 +121,7 @@ def _export_row(export_id: str) -> tuple[str, str, bool]:
         export = s.get(Export, as_uuid(export_id))
         if export is None:
             raise ExportError("Выгрузка не найдена")
+        jsonlog.bind(**{"batch_id" if export.scope == "batch" else "document_id": str(export.target_id)})
         return export.scope, str(export.target_id), export.include_rejected
 
 

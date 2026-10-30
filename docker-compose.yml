@@ -1,7 +1,13 @@
 # Светофор рисков: окружение целиком. Запуск: docker compose up --build
 # Значения берутся из .env (шаблон — .env.example); без .env подставляются безопасные для разработки.
-# Состав: БД, Redis, MinIO, API, воркеры Celery, заглушка LLM и фронтенд (интерфейс — http://localhost:8080);
-# Flower добавляется позже.
+#
+# Сервисы: db (PostgreSQL + pgvector), redis (брокер Celery и события SSE), minio (файлы), api (FastAPI),
+# worker (очереди ingest, analysis, export и планировщик очистки), worker-ocr (очередь ocr), flower
+# (мониторинг очередей), frontend (интерфейс и прокси /api). Вспомогательные: ml-base — только сборка
+# базового образа воркеров, llm-stub — заглушка LLM, пока в .env не задан настоящий провайдер.
+#
+# Адреса на хосте: интерфейс http://localhost:8080, API http://localhost:8000/api/docs,
+# Flower http://localhost:5555, консоль MinIO http://localhost:9001.
 
 name: b2b
 
@@ -38,6 +44,8 @@ x-worker-env: &worker-env
   LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-8}
   LLM_REASONING: ${LLM_REASONING:-none}
   LLM_CACHE: ${LLM_CACHE:-1}
+  # Второй взгляд: находка с уверенностью ниже порога перепроверяется коротким вызовом; 0 — выключить
+  LLM_VERIFY_BELOW: ${LLM_VERIFY_BELOW:-0.85}
   RULES_PER_GROUP: ${RULES_PER_GROUP:-4}
   TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
   # Повторы временных ошибок этапа: всего попыток и база экспоненциальной паузы, с
@@ -50,6 +58,9 @@ x-worker-env: &worker-env
   WORKER_SOFT_SHUTDOWN_SECONDS: ${WORKER_SOFT_SHUTDOWN_SECONDS:-20}
   # Если воркер убит без остановки (SIGKILL, сбой хоста), Redis вернёт задачу в очередь через столько секунд
   CELERY_VISIBILITY_TIMEOUT: ${CELERY_VISIBILITY_TIMEOUT:-3600}
+  # Журнал в JSON (одна строка — одна запись, с batch_id, document_id, export_id); text — обычный текст
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
 x-worker: &worker
   build:
@@ -138,6 +149,10 @@ services:
       DEMO_PASSWORD: ${DEMO_PASSWORD:-demo}
       # Тест правила ждёт ответ воркера столько секунд и ещё 10 на очередь
       TEST_RULE_TIMEOUT: ${TEST_RULE_TIMEOUT:-60}
+      SSE_HEARTBEAT_SECONDS: ${SSE_HEARTBEAT_SECONDS:-15}
+      SSE_MAX_SECONDS: ${SSE_MAX_SECONDS:-3000}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -165,6 +180,10 @@ services:
       <<: *worker-env
       WORKER_QUEUES: ingest,analysis,export
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      # Celery beat внутри воркера: раз в CLEANUP_INTERVAL_MINUTES удаляет черновики старше суток и файлы
+      # просроченных выгрузок. Beat должен быть один: при нескольких репликах worker вынесите его отдельно
+      WORKER_ARGS: --beat --schedule /tmp/celerybeat-schedule
+      CLEANUP_INTERVAL_MINUTES: ${CLEANUP_INTERVAL_MINUTES:-60}
 
   # Очередь ocr: группы по 5 страниц скана; каждая задача распознаёт страницы в пуле до 4 потоков
   worker-ocr:
@@ -174,7 +193,42 @@ services:
       WORKER_QUEUES: ocr
       WORKER_CONCURRENCY: ${OCR_WORKER_CONCURRENCY:-2}
 
-  # Заглушка LLM для разработки: отвечает как OpenAI chat/completions, цитаты берёт из запроса
+  # Мониторинг очередей и задач Celery: http://localhost:5555 (только с этой машины)
+  flower:
+    image: mher/flower:2.0.1
+    command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555", "--purge_offline_workers=600"]
+    environment:
+      # Вкладка «Broker»: длины очередей ingest, ocr, analysis, export
+      FLOWER_BROKER_API: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:${FLOWER_PORT:-5555}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5555/healthcheck"]
+      <<: *hc
+    restart: unless-stopped
+
+  # Интерфейс: статика SPA за nginx, /api проксируется на сервис api (SSE — без буферизации)
+  frontend:
+    build:
+      context: ./frontend
+    image: b2b-frontend:local
+    environment:
+      API_UPSTREAM: http://api:8000
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      <<: *hc
+    restart: unless-stopped
+
+  # Заглушка LLM: отвечает как OpenAI chat/completions, цитаты берёт из запроса. Работает по умолчанию —
+  # без ключа анализ идёт через неё; с настоящим провайдером в .env (LLM_BASE_URL) воркеры к ней не ходят
   llm-stub:
     build:
       context: ./devtools/llm_stub
@@ -184,20 +238,6 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
       <<: *hc
-    restart: unless-stopped
-
-  # Интерфейс: статика SPA за nginx, запросы /api проксируются на сервис api
-  frontend:
-    build:
-      context: ./frontend
-    image: b2b-frontend:local
-    environment:
-      API_UPSTREAM: http://api:8000
-    ports:
-      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
-    depends_on:
-      api:
-        condition: service_started
     restart: unless-stopped
 
 volumes:

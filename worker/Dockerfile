@@ -23,8 +23,10 @@ RUN useradd --system --uid 10001 --create-home app \
 USER app
 
 ENV WORKER_QUEUES=ingest,analysis,export \
-    WORKER_CONCURRENCY=2
-# Пул только prefork: PyMuPDF не работает в нескольких потоках одного процесса
+    WORKER_CONCURRENCY=2 \
+    WORKER_ARGS=""
+# Пул только prefork: PyMuPDF не работает в нескольких потоках одного процесса.
+# WORKER_ARGS — дополнительные ключи Celery; в docker-compose сервис worker запускает с ними beat
 HEALTHCHECK --interval=30s --timeout=20s --start-period=60s --retries=5 \
     CMD celery -A worker.app inspect ping -d "celery@$HOSTNAME" --timeout 10 > /dev/null || exit 1
-CMD ["sh", "-c", "exec celery -A worker.app worker -Q \"$WORKER_QUEUES\" --pool prefork --concurrency \"$WORKER_CONCURRENCY\" -n \"celery@$HOSTNAME\" --loglevel INFO"]
+CMD ["sh", "-c", "exec celery -A worker.app worker -Q \"$WORKER_QUEUES\" --pool prefork --concurrency \"$WORKER_CONCURRENCY\" -n \"celery@$HOSTNAME\" --loglevel \"${LOG_LEVEL:-INFO}\" $WORKER_ARGS"]

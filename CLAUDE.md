@@ -4,7 +4,7 @@
 
 Проект делает команда из пяти человек для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов». Этап 1 — месяц удалённо, этап 2 — 48 часов очно с дополнительным заданием.
 
-На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд, API (вход, пакеты и загрузка файлов, документы, ревью находок, правила и профили; `/api/config`, `/api/healthz`, тест правила `POST /api/rules/test`) и конвейер Celery от файла до находок: распаковка архивов, извлечение текста, OCR сканов группами страниц, предмет и паспорт закупки, анализ группами правил через LLM; прогресс пакета в реальном времени по SSE (`GET /api/batches/{id}/events`), повторы временных ошибок с паузой, dead-letter и повтор упавшего документа (`POST /api/documents/{id}/retry`); выгрузка в очереди `export` — размеченный DOCX (заливка и комментарии Word) или PDF (выделения с заметками) и zip пакета со структурой архива и `Сводка.xlsx`, файл отдаёт API (`GET /api/exports/{id}/download`) (ветка `dev`). docker-compose поднимает восемь сервисов: db, redis, minio, api, worker, worker-ocr, llm-stub — заглушку LLM, к которой по умолчанию ходят воркеры, — и frontend: статика за nginx, запросы `/api` идут на настоящий API. Встроенный мок API остался для разработки и демо без бэкенда.
+На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд, API (вход, пакеты и загрузка файлов, документы, ревью находок, правила и профили; `/api/config`, `/api/healthz`, тест правила `POST /api/rules/test`) и конвейер Celery от файла до находок: распаковка архивов, извлечение текста, OCR сканов группами страниц, предмет и паспорт закупки, анализ группами правил через LLM; прогресс пакета в реальном времени по SSE (`GET /api/batches/{id}/events`), повторы временных ошибок с паузой, dead-letter и повтор упавшего документа (`POST /api/documents/{id}/retry`); выгрузка в очереди `export` — размеченный DOCX (заливка и комментарии Word) или PDF (выделения с заметками) и zip пакета со структурой архива и `Сводка.xlsx`, файл отдаёт API (`GET /api/exports/{id}/download`) (ветка `dev`). docker-compose поднимает восемь сервисов продукта — db, redis, minio, api, worker, worker-ocr, flower и frontend (статика за nginx, запросы `/api` идут на настоящий API) — и llm-stub, заглушку LLM, к которой воркеры ходят, пока в `.env` нет настоящего провайдера; у каждого healthcheck. Журнал API и воркеров — JSON с `batch_id` и `document_id`; Celery beat в `worker` раз в час удаляет черновики старше суток и файлы просроченных выгрузок. Встроенный мок API остался для разработки и демо без бэкенда.
 
 ## Код и команды
 
@@ -16,7 +16,7 @@
 | `bench/` | Стенды: генератор сканов, 1 − CER, сверка нумерации, выбор bi-encoder, сквозной прогон функций ML и через задачи конвейера (`bench.e2e`), модели решений против LLM; синтетический пакет с заложенными рисками, размеченные пункты (`clauses.py`) и разметка трёх открытых пакетов 44-ФЗ (`packages/`) |
 | `tests/` | pytest; эталонные снимки парсера — в `tests/snapshots/` |
 | `storage/` | Клиент MinIO, общий для API и воркеров; `MemoryStorage` для тестов |
-| `worker/` | Celery: приложение `worker.app:celery_app`, очереди `ingest`, `ocr`, `analysis`, `export`; задачи конвейера и их сигнатуры (контракт 3) — `worker/tasks.py`, безопасная распаковка zip — `worker/archive.py`, события пакета для SSE и dead-letter (Redis) — `worker/events.py`, выгрузка — `worker/exports.py` (задачи) и `worker/markup.py` (разметка DOCX и PDF, `Сводка.xlsx`), образ поверх `ml/Dockerfile` |
+| `worker/` | Celery: приложение `worker.app:celery_app`, очереди `ingest`, `ocr`, `analysis`, `export`; задачи конвейера и их сигнатуры (контракт 3) — `worker/tasks.py`, безопасная распаковка zip — `worker/archive.py`, события пакета для SSE и dead-letter (Redis) — `worker/events.py`, выгрузка — `worker/exports.py` (задачи) и `worker/markup.py` (разметка DOCX и PDF, `Сводка.xlsx`), периодическая очистка — `worker/maintenance.py`, журнал в JSON — `worker/jsonlog.py`, образ поверх `ml/Dockerfile` |
 | `api/` | FastAPI: приложение `api.app:create_app`, вход (JWT в httpOnly cookie), пакеты и загрузка файлов, документы и находки, правила и их тест через очередь, поток событий пакета (SSE, `api/sse.py`), повтор документа, выгрузка и скачивание файла, единый формат ошибок, `Dockerfile` лёгкого образа; запуск и состав окружения — в `docker-compose.yml` |
 | `devtools/llm_stub/` | Заглушка LLM, совместимая с OpenAI `chat/completions`: отвечает по JSON-схеме запроса цитатами из него же, без модели и без оплаты; сервис `llm-stub` в docker-compose |
 | `frontend/` | SPA на React + Vite: шесть экранов, клиент API, мок API с тем же контрактом; описание — в [frontend/README.md](frontend/README.md) |
@@ -79,9 +79,9 @@ ML-код уже следует «Требованиям к бэкенду» о�
 
 Организатор задал допустимые технологии по слоям (см. [docs/hackathon.md](docs/hackathon.md)). Выбор команды, зафиксированный в [docs/tasks.md](docs/tasks.md):
 
-- **Бэкенд:** Python, REST API, Pydantic, Alembic, SSE для прогресса, JWT в httpOnly cookie.
+- **Бэкенд:** Python, FastAPI, REST API, Pydantic, Alembic, SSE для прогресса, JWT в httpOnly cookie (FastAPI выбран 29 октября).
 - **Фронтенд:** React + TypeScript, сборка Vite, TanStack Query, React Router; статика за nginx (выбрано 29 октября вместо Next.js из «Архитектуры»: чистое SPA без серверной части).
-- **Очереди:** Celery, очереди `ingest`, `ocr`, `analysis`, `export`; Flower для мониторинга.
+- **Очереди:** Celery с брокером Redis (выбран 29 октября; Redis же — поток событий для SSE), очереди `ingest`, `ocr`, `analysis`, `export`; Flower для мониторинга.
 - **Данные:** PostgreSQL + pgvector (индекс HNSW), файлы — в MinIO.
 - **Извлечение текста:** PyMuPDF для pdf, python-docx ≥ 1.2 для docx, LibreOffice headless для doc и rtf, Tesseract `rus+eng` с предобработкой OpenCV для сканов.
 - **Анализ:** regex и ключевые слова, векторный поиск по фрагментам, LLM через адаптер с единым интерфейсом, rapidfuzz для привязки цитат.
@@ -89,10 +89,8 @@ ML-код уже следует «Требованиям к бэкенду» о�
 
 Не зафиксировано в документах — уточняйте у команды, не выбирайте молча:
 
-- веб-фреймворк бэкенда (FastAPI или Django);
-- брокер Celery (Redis или RabbitMQ);
 - провайдер LLM (внешний API или локальный vLLM) и модель эмбеддингов (в документах назван пример — multilingual-e5);
-- состав восьми сервисов docker-compose.
+- состав восьми сервисов docker-compose: собран по плану Влада (см. выше), сверить с «Архитектурой», когда она появится в репозитории.
 
 ## Правила продукта
 

@@ -68,3 +68,37 @@ def test_openapi_is_served(client):
     r = client.get("/api/openapi.json")
     assert r.status_code == 200
     assert "/api/auth/login" in r.json()["paths"]
+
+
+def test_log_context_from_request_path():
+    """Запись журнала внутри запроса `/api/batches/{id}/…` несёт `batch_id`, после запроса контекст пуст."""
+    import asyncio
+    import uuid
+
+    from api.app import LogContextMiddleware
+    from worker import jsonlog
+
+    seen = []
+
+    async def app(scope, receive, send):
+        seen.append(jsonlog.current())
+
+    batch_id, doc_id = str(uuid.uuid4()), str(uuid.uuid4())
+    mw = LogContextMiddleware(app)
+    for path in (f"/api/batches/{batch_id}/events", f"/api/documents/{doc_id}", "/api/rules"):
+        asyncio.run(mw({"type": "http", "path": path}, None, None))
+    assert seen == [{"batch_id": batch_id}, {"document_id": doc_id}, {}]
+    assert jsonlog.current() == {}
+
+
+def test_healthz_is_not_in_access_log():
+    import logging
+
+    from api.app import _SkipHealthz
+
+    def record(path):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                                 ("127.0.0.1:1", "GET", path, "1.1", 200), None)
+
+    assert not _SkipHealthz().filter(record("/api/healthz"))
+    assert _SkipHealthz().filter(record("/api/batches"))

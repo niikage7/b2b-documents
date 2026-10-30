@@ -73,7 +73,7 @@ from contracts.extraction import ExtractionResult, OcrPage, PageInfo
 from db import batches, pipeline
 from db.models import Batch, Document
 from ml.errors import CorruptedFileError, MLError, UnsupportedFormatError
-from worker import events, progress, runtime
+from worker import events, jsonlog, progress, runtime
 from worker.app import celery_app
 from worker.archive import Limits, Unpacker, extension
 from worker.progress import ocr_page_done, report_progress, rules_done
@@ -160,6 +160,7 @@ def _run_stage(task, document_id: str, stage: str, work: Callable[[DocInfo], Any
             return None
         info = DocInfo(id=str(doc.id), batch_id=str(doc.batch_id), filename=doc.filename, kind=doc.kind,
                        object_key=doc.object_key)
+        jsonlog.bind(batch_id=info.batch_id, document_id=info.id)
         run_id = pipeline.start_task_run(s, batch_id=doc.batch_id, stage=stage, document_id=doc.id).id
         batches.mark_processing(s, doc.batch_id)
     try:
