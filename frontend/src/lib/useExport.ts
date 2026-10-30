@@ -5,7 +5,7 @@ import { useToast } from '../components/feedback';
 
 /**
  * Выгрузка: POST ставит задачу в очередь export, затем раз в секунду GET /api/exports/{id},
- * пока файл не готов. Готовый файл скачивается по подписанной ссылке.
+ * пока файл не готов. Готовый файл отдаёт сам API: ссылка работает с cookie входа.
  */
 export function useExport() {
   const toast = useToast();

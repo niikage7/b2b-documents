@@ -82,7 +82,7 @@ function TestPanel({ draft }: { draft: RuleInput }) {
     } catch (e) {
       if ((e as Error).name === 'AbortError' || controller.signal.aborted) return;
       const message =
-        e instanceof ApiError && (e.code === 'test_timeout' || e.status === 504 || e.status === 503) ? 'Проверка не уложилась в 60 секунд. Сократите текст или уточните инструкцию' : errorMessage(e);
+        e instanceof ApiError && (e.code === 'test_timeout' || e.status === 504) ? 'Проверка не уложилась в 60 секунд. Сократите текст или уточните инструкцию' : errorMessage(e);
       setState({ status: 'error', message });
     }
   };

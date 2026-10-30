@@ -1,6 +1,6 @@
 # Фронтенд
 
-SPA на React 19 + TypeScript, сборка Vite. Шесть экранов из [описания интерфейса](../docs/interface.md): вход, загрузка и обработка пакета, все пакеты, разбор пакета, редактор документа, правила. Данные — по контракту API из «Требований к бэкенду» (6 октября); пока API нет, фронтенд работает на встроенном моке с тем же контрактом.
+SPA на React 19 + TypeScript, сборка Vite. Шесть экранов из [описания интерфейса](../docs/interface.md): вход, загрузка и обработка пакета, все пакеты, разбор пакета, редактор документа, правила. Данные — по контракту API из «Требований к бэкенду» (6 октября). В docker-compose интерфейс работает с настоящим API (http://localhost:8080); встроенный мок с тем же контрактом нужен для разработки и демо без бэкенда.
 
 ## Запуск
 
@@ -8,7 +8,7 @@ SPA на React 19 + TypeScript, сборка Vite. Шесть экранов и�
 cd frontend
 npm install
 npm run dev:mock    # http://localhost:5173, мок API в браузере, бэкенд не нужен
-npm run dev         # то же, но /api проксируется на API_PROXY_TARGET (по умолчанию http://localhost:8000)
+npm run dev         # настоящий API: /api проксируется на API_PROXY_TARGET (по умолчанию http://localhost:8000, docker compose up)
 ```
 
 В режиме мока вход — `methodologist`, `lawyer` или `specialist` с паролем `demo`. Данные мока лежат в `localStorage` браузера: ревью находок переживает перезагрузку. Кнопка «Сбросить демо-данные» на экране входа возвращает исходный набор.
@@ -23,7 +23,7 @@ npm run build:mock  # статика с моком — демо без бэке�
 
 ## Docker
 
-Образ собирает статику и раздаёт её через nginx. Запросы `/api/*` nginx проксирует на `API_UPSTREAM` (по умолчанию `http://api:8000`); для `/api/batches/{id}/events` буферизация выключена, а таймаут — 1 час, как требует SSE. `/healthz` — для healthcheck в docker-compose.
+Сервис `frontend` в docker-compose. Образ собирает статику и раздаёт её через nginx. Запросы `/api/*` nginx проксирует на `API_UPSTREAM` (по умолчанию `http://api:8000`); для `/api/batches/{id}/events` буферизация выключена, а таймаут — 1 час, как требует SSE. `/healthz` — для healthcheck в docker-compose.
 
 ```bash
 docker build -t b2b-frontend frontend
@@ -41,7 +41,7 @@ docker build -t b2b-frontend-demo --build-arg VITE_MOCK_API=true frontend   # д
 | `src/components/` | Общие компоненты: кнопки, бейджи уровня, тосты, диалоги, меню, состояния загрузки и ошибок |
 | `src/lib/` | Логика без React: отрезки подсветки, выделение мышью → `block_id + start + end`, раскладка выносок, проверка правила как в `ml/analysis/templates.py` |
 
-Когда API опубликует `/api/openapi.json`, `src/api/types.ts` заменяется сгенерированными типами (`npx openapi-typescript`); имена полей уже совпадают. Мок после этого остаётся для демо и разработки без бэкенда.
+API публикует `/api/openapi.json`, но ответы в нём не типизированы (`dict`), поэтому `src/api/types.ts` пока написан вручную; соответствие проверено прогоном всех экранов на настоящем API.
 
 ### Правила продукта во фронтенде
 

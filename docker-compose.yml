@@ -1,7 +1,7 @@
 # Светофор рисков: окружение целиком. Запуск: docker compose up --build
 # Значения берутся из .env (шаблон — .env.example); без .env подставляются безопасные для разработки.
-# Состав растёт по этапам: здесь БД, Redis, MinIO, API, воркеры Celery и заглушка LLM; Flower и фронтенд
-# добавляются позже.
+# Состав: БД, Redis, MinIO, API, воркеры Celery, заглушка LLM и фронтенд (интерфейс — http://localhost:8080);
+# Flower добавляется позже.
 
 name: b2b
 
@@ -184,6 +184,20 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
       <<: *hc
+    restart: unless-stopped
+
+  # Интерфейс: статика SPA за nginx, запросы /api проксируются на сервис api
+  frontend:
+    build:
+      context: ./frontend
+    image: b2b-frontend:local
+    environment:
+      API_UPSTREAM: http://api:8000
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

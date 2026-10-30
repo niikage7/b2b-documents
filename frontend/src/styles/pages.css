@@ -533,8 +533,41 @@
   width: auto;
 }
 
+/* Правая панель оставляет таблице около 730 px при ширине окна 1440: колонки не должны выталкивать статус */
+.findings-filters {
+  flex-wrap: wrap;
+}
+
+.findings-table {
+  table-layout: fixed;
+}
+
+.findings-table th:nth-child(1) {
+  width: 112px;
+}
+
+.findings-table th:nth-child(3) {
+  width: 132px;
+}
+
+.findings-table th:nth-child(4) {
+  width: 104px;
+}
+
+.findings-table th:nth-child(6) {
+  width: 96px;
+}
+
+.findings-table td:nth-child(3) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.findings-table td:nth-child(4) {
+  white-space: normal;
+}
+
 .findings-table__quote {
-  max-width: 340px;
   font-family: var(--font-doc);
   color: var(--text-muted);
   overflow: hidden;

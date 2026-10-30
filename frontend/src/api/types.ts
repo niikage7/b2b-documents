@@ -111,7 +111,8 @@ export interface DraftFiles {
   total_bytes: number;
 }
 
-export type DocumentKind = 'docx' | 'doc' | 'rtf' | 'pdf' | 'scan';
+// zip — только у архива, который не распаковался: документ сразу в статусе «Ошибка»
+export type DocumentKind = 'docx' | 'doc' | 'rtf' | 'pdf' | 'scan' | 'zip';
 export type DocumentStatus = 'queued' | 'processing' | 'done' | 'error';
 export type Stage = 'queued' | 'extracting' | 'ocr' | 'analysis' | 'done' | 'error';
 

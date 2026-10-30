@@ -4,7 +4,7 @@
 
 Проект делает команда из пяти человек для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов». Этап 1 — месяц удалённо, этап 2 — 48 часов очно с дополнительным заданием.
 
-На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд, API (вход, пакеты и загрузка файлов, документы, ревью находок, правила и профили; `/api/config`, `/api/healthz`, тест правила `POST /api/rules/test`) и конвейер Celery от файла до находок: распаковка архивов, извлечение текста, OCR сканов группами страниц, предмет и паспорт закупки, анализ группами правил через LLM; прогресс пакета в реальном времени по SSE (`GET /api/batches/{id}/events`), повторы временных ошибок с паузой, dead-letter и повтор упавшего документа (`POST /api/documents/{id}/retry`); выгрузка в очереди `export` — размеченный DOCX (заливка и комментарии Word) или PDF (выделения с заметками) и zip пакета со структурой архива и `Сводка.xlsx`, файл отдаёт API (`GET /api/exports/{id}/download`) (ветка `dev`). docker-compose поднимает семь сервисов: db, redis, minio, api, worker, worker-ocr и llm-stub — заглушку LLM, к которой по умолчанию ходят воркеры. Фронтенд работает на встроенном моке API по контракту «Требований к бэкенду».
+На 29 октября 2026 в репозитории есть ML-часть, слой данных, фронтенд, API (вход, пакеты и загрузка файлов, документы, ревью находок, правила и профили; `/api/config`, `/api/healthz`, тест правила `POST /api/rules/test`) и конвейер Celery от файла до находок: распаковка архивов, извлечение текста, OCR сканов группами страниц, предмет и паспорт закупки, анализ группами правил через LLM; прогресс пакета в реальном времени по SSE (`GET /api/batches/{id}/events`), повторы временных ошибок с паузой, dead-letter и повтор упавшего документа (`POST /api/documents/{id}/retry`); выгрузка в очереди `export` — размеченный DOCX (заливка и комментарии Word) или PDF (выделения с заметками) и zip пакета со структурой архива и `Сводка.xlsx`, файл отдаёт API (`GET /api/exports/{id}/download`) (ветка `dev`). docker-compose поднимает восемь сервисов: db, redis, minio, api, worker, worker-ocr, llm-stub — заглушку LLM, к которой по умолчанию ходят воркеры, — и frontend: статика за nginx, запросы `/api` идут на настоящий API. Встроенный мок API остался для разработки и демо без бэкенда.
 
 ## Код и команды
 
@@ -28,11 +28,12 @@ uv pip install --python .venv/bin/python -e ".[ml,embeddings,pg,db,api,worker,de
 .venv/bin/ruff check contracts ml bench tests db api worker storage
 .venv/bin/alembic -c db/alembic.ini upgrade head   # схема БД по DATABASE_URL
 
-docker compose up --build                # db, redis, minio, api, worker, worker-ocr, llm-stub: http://localhost:8000/api/docs; вход demo-пользователями, пароль из DEMO_PASSWORD (по умолчанию demo)
+docker compose up --build                # весь продукт: интерфейс http://localhost:8080, API http://localhost:8000/api/docs; вход demo-пользователями, пароль из DEMO_PASSWORD (по умолчанию demo)
 TEST_DATABASE_URL=postgresql+psycopg://b2b:b2b@localhost:55432/postgres .venv/bin/python -m pytest tests/api tests/worker tests/devtools
 
 cd frontend && npm install
 npm run dev:mock                         # интерфейс на моке API: http://localhost:5173, пароль demo
+npm run dev                              # интерфейс из исходников на настоящем API (docker compose up): http://localhost:5173
 npm run typecheck && npm run lint && npm test
 ```
 

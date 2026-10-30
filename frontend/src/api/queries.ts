@@ -46,7 +46,10 @@ export function useDocument(id: string) {
 }
 
 function patchDocument(view: BatchView, documentId: string, patch: Partial<DocumentCard>): BatchView {
-  return { ...view, documents: view.documents.map((d) => (d.id === documentId ? { ...d, ...patch } : d)) };
+  const documents = view.documents.map((d) => (d.id === documentId ? { ...d, ...patch } : d));
+  // batch.progress приходит не чаще раза в секунду и теряет хвост серии: процент считаем как сервер, по документам
+  const percent = Math.floor(documents.reduce((sum, d) => sum + d.progress, 0) / (documents.length || 1));
+  return { ...view, documents, progress: view.progress && { ...view.progress, percent } };
 }
 
 /** Событие SSE → кэш пакета. Итоговые события перечитывают пакет целиком: в них не все поля. */

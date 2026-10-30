@@ -5,9 +5,29 @@ import { buildSegments, findMatches } from '../lib/segments';
 import { selectionToBlock } from '../lib/selection';
 import { sectionLabel } from '../pages/document/FindingCard';
 import { safeNext } from '../pages/LoginPage';
-import type { DocumentCard } from '../api/types';
+import { QueryClient } from '@tanstack/react-query';
+import { applyBatchEvent, keys } from '../api/queries';
+import type { BatchView, DocumentCard, DocumentProgressEvent } from '../api/types';
 import { findingLink, sortDocuments } from '../pages/BatchPage';
 import { isBatchRunning, lowQualityNote } from '../pages/ProcessingPage';
+
+describe('applyBatchEvent', () => {
+  it('document.progress двигает общий процент пакета без batch.progress', () => {
+    const qc = new QueryClient();
+    const view = {
+      id: 'b',
+      progress: { done: 0, total: 2, errors: 0, percent: 1 },
+      documents: [
+        { id: 'a', progress: 5 },
+        { id: 'c', progress: 5 },
+      ],
+    } as unknown as BatchView;
+    qc.setQueryData(keys.batch('b'), view);
+    const data = { document_id: 'a', status: 'processing', stage: 'analysis', stage_label: 'Анализ по правилам', stage_detail: null, next_stage_label: null, progress: 65 } satisfies DocumentProgressEvent;
+    applyBatchEvent(qc, 'b', { type: 'document.progress', data });
+    expect(qc.getQueryData<BatchView>(keys.batch('b'))?.progress?.percent).toBe(35);
+  });
+});
 
 describe('buildSegments', () => {
   const text = 'Поставка Товара осуществляется в течение 3 (трёх) календарных дней.';
