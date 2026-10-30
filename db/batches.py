@@ -302,6 +302,12 @@ def batch_view(s: Session, batch_id) -> dict:
         .where(Finding.batch_id == batch.id, Finding.status != "rejected")
         .group_by(Rule.id, Rule.code, Rule.title, Rule.level).order_by(Rule.code)
     ).all()
+    # Проверки пакета — рядом с правилами: критичное противоречие не должно быть видно только в списке находок
+    checks = s.execute(
+        select(Finding.check_code, func.min(Finding.check_title), Finding.original_level, func.count())
+        .where(Finding.batch_id == batch.id, Finding.status != "rejected", Finding.check_code.is_not(None))
+        .group_by(Finding.check_code, Finding.original_level).order_by(Finding.check_code)
+    ).all()
     return base | {
         "progress": {"done": done, "total": len(docs), "errors": summary["counters"]["errors"],
                      "percent": int(sum(d.progress for d in docs) / len(docs)) if docs else 0},
@@ -309,8 +315,14 @@ def batch_view(s: Session, batch_id) -> dict:
         "worst_level": summary["worst_level"], "counters": summary["counters"], "review": summary["review"],
         "findings": summary["findings"], "documents": cards,
         "rules_triggered": [{"rule_id": str(rid), "code": code, "title": title, "level": lvl, "count": n}
-                            for rid, code, title, lvl, n in triggered],
+                            for rid, code, title, lvl, n in triggered]
+        + [{"rule_id": f"{CHECK_FILTER}{code}", "code": code, "title": (title or code).split(":")[0], "level": lvl, "count": n}
+           for code, title, lvl, n in checks],
     }
+
+
+CHECK_FILTER = "check:"
+"""`rule_id` фильтра находок для встроенной проверки пакета: у неё нет id правила."""
 
 
 def mark_processing(s: Session, batch_id) -> None:

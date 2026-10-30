@@ -139,7 +139,9 @@ def batch_findings(s: Session, batch_id, *, level: str | None = None, rule_id=No
     q = select(Finding).where(Finding.batch_id == _id(batch_id))
     if level:
         q = q.where(Finding.level == level)
-    if rule_id:
+    if rule_id and str(rule_id).startswith("check:"):
+        q = q.where(Finding.check_code == str(rule_id).removeprefix("check:"))
+    elif rule_id:
         q = q.where(Finding.rule_id == _id(rule_id))
     if status:
         q = q.where(Finding.status == status)

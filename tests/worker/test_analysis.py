@@ -239,6 +239,14 @@ def test_package_checks_in_pipeline_keep_lawyer_decision(env, s, author, fake_ll
     assert view["rule"] == {"id": None, "code": "A-01", "title": "Число цифрами не совпадает с прописью"}
     assert view["check_code"] == "A-01" and view["from_scan"] is False
 
+    view = batches.batch_view(s, batch_id)
+    assert {"rule_id": "check:A-01", "code": "A-01", "title": "Число цифрами не совпадает с прописью",
+            "level": "warning", "count": 1} in view["rules_triggered"]
+    from db import documents
+
+    page = documents.batch_findings(s, batch_id, rule_id="check:A-01")
+    assert [f["check_code"] for f in page["items"]] == ["A-01"]
+
     findings_db.update_finding(s, rows[0].id, actor_id=author.id, version=rows[0].version, status="rejected")
     tasks.rerun_batch(str(batch_id), [str(doc.id)])
     again = [f for f in ai_findings(s, doc.id) if f.check_code == "A-01"]

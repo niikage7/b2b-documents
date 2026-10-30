@@ -189,7 +189,8 @@ def batch_findings(
     user: CurrentUser,
     s: DbSession,
     level: Literal["critical", "warning"] | None = None,
-    rule_id: uuid.UUID | None = None,
+    # id правила или `check:X-01` — встроенная проверка пакета
+    rule_id: Annotated[str | None, Query(pattern=r"^(check:[\w-]{1,20}|[0-9a-fA-F-]{36})$")] = None,
     status: Literal["new", "accepted", "rejected", "edited"] | None = None,
     document_id: uuid.UUID | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
