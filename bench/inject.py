@@ -41,6 +41,7 @@ from ml.analysis.search import InMemorySearch
 from ml.checklist import load_default_checklist
 from ml.convert import convert_to_docx
 from ml.extract import extract_document
+from ml.extract.text import CLAUSE_NUMBER
 
 PACKAGES = Path(".cache/packages")
 EXPECTED = Path("bench/packages")
@@ -165,14 +166,22 @@ def _apply(body, item: Injection) -> str:
         target = next((p for p in paragraphs if re.search(item.find, _text(p), re.I)), None)
     if target is not None and item.replace:
         before = _text(target)
-        _set_text(target, item.text)
+        # Номер пункта набран в тексте: без него абзац с выступом выглядел бы при вёрстке двумя абзацами
+        number = CLAUSE_NUMBER.match(before)
+        _set_text(target, f"{number.group(0).strip()} {item.text}" if number else item.text)
         return f"заменён: {before[:90]}"
-    anchor = target if target is not None else next(
+    # Вставка — среди нумерованных пунктов: в шапке договора таких условий не бывает, и там поиск заведомо слабее
+    numbered = [p for p in body_only if CLAUSE_NUMBER.match(_text(p))]
+    anchor = target if target is not None and CLAUSE_NUMBER.match(_text(target)) else next(
+        (p for p in numbered if re.search(item.find, _text(p), re.I)), None) or next(
+        (p for p in numbered if re.search(item.fallback, _text(p), re.I)), None) or target or next(
         (p for p in body_only if re.search(item.fallback, _text(p), re.I)), None)
     if anchor is None:
         anchor = paragraphs[0]
     fresh = copy.deepcopy(anchor)
-    _set_text(fresh, item.text)
+    number = CLAUSE_NUMBER.match(_text(anchor))
+    # Свой номер у нового пункта: копия абзаца с выступом без номера при вёрстке распалась бы на две части
+    _set_text(fresh, f"{number.group(0).strip()} {item.text}" if number else item.text)
     anchor.addnext(fresh)
     return f"вставлен после: {_text(anchor)[:90]}"
 
@@ -250,11 +259,27 @@ def report(package: str, found: dict[str, list[FindingCandidate]], expected: lis
     return {"package": package, "expected": len(expected), "found": len(hits), "missed": missed, "extra": extra}
 
 
+def _as_kind(docx: Path, kind: str) -> Path:
+    """Документ с правками как PDF из LibreOffice или как скан из `bench.scangen`, с тем же именем."""
+    from bench.scangen import make_scan
+    from ml.convert import soffice_convert
+
+    pdf = docx.with_suffix(".pdf")
+    pdf.write_bytes(Path(soffice_convert(docx, "pdf")).read_bytes())
+    if kind == "pdf":
+        return pdf
+    scan = pdf.parent / "scan" / pdf.name
+    scan.parent.mkdir(exist_ok=True)
+    return make_scan(pdf, scan)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--package", action="append", help="номер пакета; по умолчанию все")
     parser.add_argument("--only", help="только эти правила, через запятую: R-02,R-07")
     parser.add_argument("--hostile", action="store_true", help="добавить абзац с указаниями модели: полнота не должна упасть")
+    parser.add_argument("--contract-as", choices=("pdf", "scan"), help="проект контракта с правками — как PDF или скан: "
+                                                                     "та же полнота на другом виде файла")
     parser.add_argument("--save", type=Path, help="записать результат в JSON")
     args = parser.parse_args()
     only = set(args.only.split(",")) if args.only else None
@@ -266,6 +291,8 @@ def main() -> None:
         print(f"\n=== {package.name}")
         with tempfile.TemporaryDirectory() as tmp:
             paths, expected = inject_package(package, Path(tmp), only=only, hostile=args.hostile)
+            if args.contract_as:
+                paths = [_as_kind(p, args.contract_as) if p.stem == "contract" else p for p in paths]
             found, usage, subject = analyse(paths)
         known_path = EXPECTED / package.name / "expected.json"
         known = json.loads(known_path.read_text()) if known_path.exists() else []

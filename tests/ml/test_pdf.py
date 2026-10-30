@@ -143,3 +143,20 @@ def test_too_many_pages(tmp_path, monkeypatch):
     doc.save(tmp_path / "big.pdf")
     with pytest.raises(TooManyPagesError):
         plan_pdf(tmp_path / "big.pdf")
+
+
+def test_justified_line_is_not_split_into_columns():
+    from ml.extract.layout import LWord, group_lines
+
+    def word(text, x0, x1, y=100.0):
+        return LWord(text=text, x0=x0, y0=y, x1=x1, y1=y + 10, size=8.0, page=1)
+
+    frame = [word("а", 50, 60, y=50), word("б", 540, 550, y=50)]
+    justified = [word("условиям", 50, 98), word("такой", 125, 153), word("независимой", 180, 245),
+                 word("гарантии,", 271, 330), word("которая", 357, 400), word("выдана", 427, 470),
+                 word("банком", 497, 550)]
+    table = [word("Товар", 50, 90, y=200), word("шт.", 300, 320, y=200), word("15", 500, 520, y=200)]
+    lines = group_lines(frame + justified + table)
+    texts = {line.text for line in lines}
+    assert "условиям такой независимой гарантии, которая выдана банком" in texts
+    assert {"Товар", "шт.", "15"} <= texts  # зазоры разные: это колонки

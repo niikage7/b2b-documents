@@ -18,6 +18,10 @@ from ml.extract.text import CLAUSE_NUMBER, clean_text
 log = logging.getLogger(__name__)
 
 COLUMN_GAP = 2.5
+JUSTIFIED_MIN_GAPS = 2
+JUSTIFIED_MIN_WIDTH = 0.8
+JUSTIFIED_GAP_RATIO = 1.6
+JUSTIFIED_MAX_GAP = 8.0
 """Разрыв в строке от 2,5 кегля — граница колонки."""
 HEADER_ZONE = 0.10
 """Колонтитул ищется в полосе 10% высоты у верхнего и нижнего края листа."""
@@ -111,18 +115,34 @@ def group_lines(words: list[LWord]) -> list[Line]:
             by_key.setdefault(w.line_key, []).append(w)
     groups = list(by_key.values())
     groups.extend(_cluster_by_height(loose))
+    text_width = max(w.x1 for w in words) - min(w.x0 for w in words)
     lines: list[Line] = []
     for group in groups:
         group.sort(key=lambda w: w.x0)
+        justified = _is_justified(group, text_width)
         current = [group[0]]
         for prev, w in zip(group, group[1:], strict=False):
             size = max(prev.size, w.size)
-            if w.x0 - prev.x1 >= COLUMN_GAP * size:
+            if not justified and w.x0 - prev.x1 >= COLUMN_GAP * size:
                 lines.append(Line(current, current[0].page))
                 current = []
             current.append(w)
         lines.append(Line(current, current[0].page))
     return lines
+
+
+def _is_justified(group: list[LWord], text_width: float) -> bool:
+    """Строка с выравниванием по ширине: зазоры почти равны, а строка занимает всю ширину текста.
+
+    В короткой такой строке зазор бывает больше порога колонки: на скане «условиям  такой  независимой
+    гарантии» распадалась на четыре абзаца, и условие терялось при поиске. У колонок зазоры разные или
+    намного больше межсловных.
+    """
+    gaps = [b.x0 - a.x1 for a, b in zip(group, group[1:], strict=False)]
+    if len(gaps) < JUSTIFIED_MIN_GAPS or group[-1].x1 - group[0].x0 < JUSTIFIED_MIN_WIDTH * text_width:
+        return False
+    return (min(gaps) > 0 and max(gaps) <= JUSTIFIED_GAP_RATIO * min(gaps)
+            and max(gaps) < JUSTIFIED_MAX_GAP * group[0].size)
 
 
 def _cluster_by_height(words: list[LWord]) -> list[list[LWord]]:
