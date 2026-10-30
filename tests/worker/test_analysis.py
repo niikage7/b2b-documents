@@ -243,3 +243,37 @@ def test_package_checks_in_pipeline_keep_lawyer_decision(env, s, author, fake_ll
     tasks.rerun_batch(str(batch_id), [str(doc.id)])
     again = [f for f in ai_findings(s, doc.id) if f.check_code == "A-01"]
     assert [(f.id, f.status) for f in again] == [(rows[0].id, "rejected")]
+
+
+def test_document_without_text_is_not_green(s, env, author, fake_llm):
+    from docx import Document as Docx
+
+    def make(path):
+        Docx().save(path)
+        return path
+
+    batch_id = make_batch(s, env, author, [("empty.docx", sample_bytes(make, ".docx"))])
+    run_batch(batch_id)
+    doc = docs_of(s, batch_id)["empty.docx"]
+    assert doc.status == "error" and doc.error_code == "no_text" and doc.worst_level == "not_checked"
+    assert "текст" in doc.error_message
+
+
+def test_assist_tasks(s, env, author, fake_llm, contract):
+    """Вопрос, вывод и запрос о разъяснениях через задачи: подделка LLM отвечает пустым вердиктом схемы."""
+    from db import exports
+    from worker import exports as export_tasks
+
+    fake_llm.plan = risk_plan("contract")
+    batch_id = make_batch(s, env, author, [("Контракт.docx", contract)])
+    run_batch(batch_id)
+
+    brief = tasks.assist({"kind": "brief", "batch_id": batch_id})
+    assert brief["result"]["decision"] in ("clarify", "caution")
+    s.expire_all()
+    assert s.get(Batch, batch_id).meta["brief"]["decision"] == brief["result"]["decision"]
+
+    job = exports.create_export(s, scope="clarification", target_id=batch_id, actor_id=author.id)
+    assert job["format"] == "docx"
+    done = export_tasks.export_clarification.apply(args=(job["export_id"],)).get()
+    assert done["status"] == "done" and done["filename"].endswith(".docx") and "разъяснен" in done["filename"]

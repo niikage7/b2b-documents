@@ -94,6 +94,36 @@ def publish_recalc(event: tuple[str, dict] | None) -> None:
     publish_document_done(batch_id, data, batch_progress=False)
 
 
+def enqueue_clarification(export_id: str) -> None:
+    """Запрос о даче разъяснений по находкам пакета: задача в очереди export."""
+    from worker import exports
+
+    try:
+        exports.export_clarification.delay(export_id)
+    except Exception:
+        log.exception("Запрос о разъяснениях %s: не удалось поставить задачу в очередь", export_id)
+
+
+def run_assist(payload: dict, *, timeout: float) -> dict:
+    """Вопрос к пакету, вывод по пакету, черновик правила — в очереди analysis: нужны LLM и эмбеддинги."""
+    from celery.exceptions import TimeoutError as CeleryTimeout
+
+    from ml.errors import LLMError
+    from worker import tasks
+
+    try:
+        async_result = tasks.assist.apply_async((payload,))
+    except Exception as exc:
+        log.exception("Запрос к ИИ: не удалось поставить задачу в очередь")
+        raise LLMError("Сервис ИИ сейчас недоступен — повторите через минуту") from exc
+    try:
+        return async_result.get(timeout=timeout)
+    except CeleryTimeout as exc:
+        raise LLMError("ИИ не ответил вовремя — повторите запрос") from exc
+    finally:
+        async_result.forget()
+
+
 def run_rule_test(payload: dict, *, timeout: float) -> dict:
     """Тест правила (FR-9.3) в очереди analysis: образ API лёгкий, а поиску нужна модель эмбеддингов.
 

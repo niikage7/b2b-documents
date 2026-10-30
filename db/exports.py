@@ -30,7 +30,11 @@ def _id(value) -> uuid.UUID:
 
 def create_export(s: Session, *, scope: str, target_id, actor_id, include_rejected: bool = False) -> dict:
     """`POST /api/documents/{id}/exports` и `/api/batches/{id}/exports`: формат — по исходнику."""
-    if scope == "document":
+    if scope == "clarification":
+        if s.get(Batch, _id(target_id)) is None:
+            raise NotFound("Пакет не найден")
+        fmt = "docx"
+    elif scope == "document":
         doc = s.get(Document, _id(target_id))
         if doc is None:
             raise NotFound("Документ не найден")
@@ -65,6 +69,8 @@ def export_filename(s: Session, export: Export) -> str:
         stem = doc.filename.rsplit(".", 1)[0] if doc else "Документ"
         return f"{stem}_разметка.{export.format}"
     batch = s.get(Batch, export.target_id)
+    if export.scope == "clarification":
+        return f"Запрос о разъяснениях_{(batch.name if batch else '') or 'пакет'}.docx"
     return f"{(batch.name if batch else '') or 'Пакет'}_разметка.zip"
 
 
@@ -85,6 +91,21 @@ def passport_fields(meta: dict | None) -> list[dict]:
     """Поля паспорта из `batch.meta`; список без обёртки — форма пакетов, обработанных до 29.10."""
     passport = (meta or {}).get("passport") or {}
     return passport if isinstance(passport, list) else passport.get("fields", [])
+
+
+def _one_per_conflict(items: list[dict]) -> list[dict]:
+    """Противоречие лежит находкой в каждом документе, а вопрос заказчику о нём — один."""
+    seen: set[frozenset] = set()
+    out = []
+    for item in items:
+        related = item.get("related") or []
+        if related:
+            key = frozenset({(item["block_id"], item["start"]), *((r["block_id"], r["start"]) for r in related)})
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(item)
+    return out
 
 
 def clarification_input(s: Session, batch_id, *, finding_ids=None) -> dict:
@@ -108,6 +129,7 @@ def clarification_input(s: Session, batch_id, *, finding_ids=None) -> dict:
         items.append(item | {"filename": doc.filename if doc else None,
                              "_order": (doc.original_path if doc else "", item["order"] or 0, f.start)})
     items.sort(key=lambda x: x.pop("_order"))
+    items = _one_per_conflict(items)
     passport = {p["key"]: p["value"] for p in passport_fields(batch.meta)}
     profile = s.get(RuleProfile, batch.profile_id)
     law = "223" if profile and "223" in f"{profile.name} {profile.short_name}" else "44"

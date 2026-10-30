@@ -4,6 +4,7 @@
     export_batch(export_id)                          заменяет себя на chord документов → build_batch_zip
     export_batch_document(export_id, document_id)    один документ пакета → exports/{id}/docs/
     build_batch_zip(results, export_id)              zip со структурой исходного архива и `Сводка.xlsx`
+    export_clarification(export_id)                  запрос о даче разъяснений заказчику по находкам пакета, DOCX
 
 Строку `export` создаёт API (`db.exports.create_export`), задача пишет результат в MinIO и закрывает
 строку `finish_export`; повтор задачи перезаписывает тот же ключ. Готовый файл (или ошибка) — событие
@@ -85,7 +86,7 @@ def _finish(export_id: str, *, key: str | None = None, error: str | None = None)
     with runtime.session_scope() as s:
         view = exports.finish_export(s, export_id, object_key=key, error=error)
         export = s.get(Export, as_uuid(export_id))
-        if export.scope == "batch":
+        if export.scope in ("batch", "clarification"):
             batch_id = export.target_id
         else:
             batch_id = s.get(Document, export.target_id).batch_id
@@ -121,7 +122,7 @@ def _export_row(export_id: str) -> tuple[str, str, bool]:
         export = s.get(Export, as_uuid(export_id))
         if export is None:
             raise ExportError("Выгрузка не найдена")
-        jsonlog.bind(**{"batch_id" if export.scope == "batch" else "document_id": str(export.target_id)})
+        jsonlog.bind(**{"document_id" if export.scope == "document" else "batch_id": str(export.target_id)})
         return export.scope, str(export.target_id), export.include_rejected
 
 
@@ -170,6 +171,31 @@ def _export_document(export_id: str) -> dict:
         fmt = "docx" if doc.kind in ("docx", "doc", "rtf") else "pdf"
     key = result_key(export_id, fmt)
     render_document(document_id, key, include_rejected=include_rejected)
+    return _finish(export_id, key=key)
+
+
+# --- Запрос о даче разъяснений -----------------------------------------------------------------
+
+
+@celery_app.task(name="worker.exports.export_clarification", bind=True)
+def export_clarification(self, export_id: str) -> dict | None:
+    """`POST /api/batches/{id}/clarification`: письмо заказчику по активным находкам пакета."""
+    return _run_export(self, export_id, lambda: _export_clarification(export_id))
+
+
+def _export_clarification(export_id: str) -> dict:
+    import ml
+
+    _, batch_id, _ = _export_row(export_id)
+    with runtime.session_scope() as s:
+        data = exports.clarification_input(s, batch_id)
+    draft = ml.draft_clarification(data["findings"], subject=data["subject"], customer=data["customer"],
+                                   procurement_number=data["procurement_number"], law=data["law"], llm=runtime.get_llm())
+    key = result_key(export_id, "docx")
+    with tempfile.TemporaryDirectory(prefix="b2b-export-") as tmp:
+        out = ml.render_clarification_docx(draft, Path(tmp) / "request.docx")
+        runtime.get_storage().put_file(key, out, content_type=MIME["docx"])
+    log.info("Запрос о разъяснениях: пакет %s: вопросов %d", batch_id, len(draft.items))
     return _finish(export_id, key=key)
 
 

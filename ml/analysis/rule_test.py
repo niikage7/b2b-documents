@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
-from contracts.analysis import RuleSpec, RuleTestFinding, RuleTestResult
+from contracts.analysis import RuleSpec, RuleTestDropped, RuleTestFinding, RuleTestResult
 from ml.analysis.blocks import BlockLike, blocks_from_text, chunk_blocks, section_of
 from ml.analysis.embeddings import Embedder
 from ml.analysis.engine import analyze_rule_group
@@ -23,6 +23,13 @@ from ml.config import get_settings
 from ml.errors import RuleTemplateError, RuleTestTimeoutError, TextTooLongError
 
 MAX_TEXT = 20_000
+# Почему ответ модели не стал находкой — словами для методолога
+REASONS = {
+    "no_risk": "Модель проверила условие и риска не нашла",
+    "not_confirmed": "Не подтвердилось при повторной проверке",
+    "quote_not_found": "Модель процитировала текст, которого нет в документе",
+}
+MAX_CONSIDERED = 20
 _TEXT_DOC = "__text__"
 
 
@@ -87,7 +94,10 @@ def test_rule(
             )
         )
     dropped = sum(1 for d in result.dropped if d.reason == "quote_not_found")
-    return RuleTestResult(findings=findings, duration_ms=int((time.monotonic() - started) * 1000), dropped=dropped)
+    considered = [RuleTestDropped(quote=d.quote[:300], reason=REASONS[d.reason], note=d.note)
+                  for d in result.dropped if d.reason in REASONS and d.quote.strip()][:MAX_CONSIDERED]
+    return RuleTestResult(findings=findings, duration_ms=int((time.monotonic() - started) * 1000), dropped=dropped,
+                          considered=considered)
 
 
 test_rule.__test__ = False  # не тест pytest, несмотря на имя

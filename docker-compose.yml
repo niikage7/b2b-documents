@@ -44,6 +44,7 @@ x-worker-env: &worker-env
   LLM_MAX_CONCURRENCY: ${LLM_MAX_CONCURRENCY:-8}
   LLM_REASONING: ${LLM_REASONING:-none}
   LLM_CACHE: ${LLM_CACHE:-1}
+  LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
   # Второй взгляд: находка с уверенностью ниже порога перепроверяется коротким вызовом; 0 — выключить
   LLM_VERIFY_BELOW: ${LLM_VERIFY_BELOW:-0.85}
   RULES_PER_GROUP: ${RULES_PER_GROUP:-4}

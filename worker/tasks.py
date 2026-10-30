@@ -18,6 +18,7 @@
     check_package(batch_id)                 analysis  проверки без LLM и противоречия между документами → finding
     finalize_batch(batch_id)                ingest    статус и счётчики пакета
     rule_test(payload)                      analysis  тест правила с экрана «Правила», без записи в БД
+    assist(payload)                         analysis  вопрос к пакету, вывод по пакету, черновик правила
 
 Канва пакета:
 
@@ -31,7 +32,7 @@
 build_pdf_result)`, остаток цепочки продолжается после него. Повторный анализ (`rerun_batch`) начинается
 с `extract_batch_meta`: предмет и паспорт уже есть, заново считаются только находки.
 
-`rule_test` — исключение из правила «только id»: правило может быть ещё не сохранено, поэтому задача
+`rule_test` и `assist` — исключение из правила «только id»: правило может быть ещё не сохранено, поэтому задача
 получает его целиком вместе с текстом или id документа и возвращает результат, а не пишет его в БД.
 
 Ошибка документа не останавливает пакет: задача пишет `fail_document` и завершается без исключения,
@@ -74,7 +75,7 @@ from contracts.analysis import RuleGroupResult, RuleSpec
 from contracts.extraction import ExtractionResult, OcrPage, PageInfo
 from db import batches, pipeline
 from db.models import Batch, Document
-from ml.errors import CorruptedFileError, MLError, UnsupportedFormatError
+from ml.errors import CorruptedFileError, MLError, NoTextError, UnsupportedFormatError
 from worker import events, jsonlog, progress, runtime
 from worker.app import celery_app
 from worker.archive import Limits, Unpacker, extension
@@ -94,6 +95,9 @@ INTERNAL_ERROR = ("internal_error", "Не удалось обработать д
 # анализ по правилам — от 80 до 98
 OCR_START, OCR_SPAN = 10, 50
 ANALYSIS_START, ANALYSIS_SPAN = 80, 18
+
+# Меньше стольких знаков на весь документ — текст считается не извлечённым
+MIN_TEXT_CHARS = 20
 
 # Повторы временных ошибок: всего попыток и база экспоненциальной паузы (5, 10, 20 с …)
 MAX_ATTEMPTS = max(1, int(os.environ.get("TASK_MAX_ATTEMPTS") or 3))
@@ -508,6 +512,9 @@ def build_structure(self, document_id: str) -> None:
 def _build_structure(info: DocInfo) -> None:
     raw = runtime.get_storage().get_bytes(runtime.work_key(info.batch_id, info.id, "extraction.json"))
     blocks = ml.build_structure(ExtractionResult.model_validate_json(raw), document_id=info.id)
+    if sum(len(b.text.strip()) for b in blocks) < MIN_TEXT_CHARS:
+        # Без текста правилам нечего читать, и документ получил бы «Без рисков»
+        raise NoTextError()
     with runtime.session_scope() as s:
         pipeline.save_blocks(s, info.id, blocks)
         data = pipeline.set_stage(s, info.id, "extracting", progress=60)
@@ -744,3 +751,52 @@ def rule_test(payload: dict) -> dict:
         log.info("rule_test: %s: %s", exc.code, exc)
         return {"error": {"code": exc.code, "message": exc.message, "retryable": exc.retryable}}
     return {"result": result.model_dump(mode="json")}
+
+
+@celery_app.task(name="worker.tasks.assist")
+def assist(payload: dict) -> dict:
+    """Короткие вызовы по запросу пользователя; API ждёт ответ, как у `rule_test`.
+
+    `payload["kind"]`: `ask` (`batch_id`, `question`), `brief` (`batch_id`), `rule_draft` (`description`).
+    Возвращает `{"result": ...}` или `{"error": {code, message, retryable}}`.
+    """
+    try:
+        kind = payload["kind"]
+        if kind == "ask":
+            result = _assist_ask(str(payload["batch_id"]), payload["question"])
+        elif kind == "brief":
+            result = _assist_brief(str(payload["batch_id"]))
+        elif kind == "rule_draft":
+            result = ml.draft_rule(payload["description"], llm=runtime.get_llm())
+        else:
+            raise ValueError(f"Неизвестный вид запроса: {kind}")
+    except MLError as exc:
+        log.info("assist: %s: %s", exc.code, exc)
+        return {"error": {"code": exc.code, "message": exc.message, "retryable": exc.retryable}}
+    return {"result": result.model_dump(mode="json")}
+
+
+def _batch_document_ids(batch_id: str) -> list[str]:
+    with runtime.session_scope() as s:
+        return [str(d) for d in s.scalars(select(Document.id).where(Document.batch_id == pipeline.as_uuid(batch_id),
+                                                                    Document.status == "done"))]
+
+
+def _assist_ask(batch_id: str, question: str):
+    documents = [d for d in _ready_documents(_batch_document_ids(batch_id)) if d[2]]
+    return ml.ask_package(question, documents, search=_search([d for d, _, _ in documents]), llm=runtime.get_llm())
+
+
+def _assist_brief(batch_id: str):
+    from db import exports
+
+    with runtime.session_scope() as s:
+        data = exports.clarification_input(s, batch_id)
+        batch = s.get(Batch, pipeline.as_uuid(batch_id))
+        passport = exports.passport_fields(batch.meta)
+        statuses = list(s.scalars(select(Document.status).where(Document.batch_id == batch.id)))
+    brief = ml.package_brief(data["findings"], subject=data["subject"], passport=passport, documents=len(statuses),
+                             not_checked=statuses.count("error"), llm=runtime.get_llm())
+    with runtime.session_scope() as s:
+        pipeline.set_batch_brief(s, batch_id, brief.model_dump(mode="json", exclude={"usage"}))
+    return brief

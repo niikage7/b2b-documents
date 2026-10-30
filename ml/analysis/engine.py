@@ -252,7 +252,8 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
         for finding in answer.findings:
             if not finding.risk:
                 # Модель проверила условие и риска не нашла: в отчёт не идёт, остаётся в логе
-                result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote, reason="no_risk"))
+                result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote, reason="no_risk",
+                                                     note=finding.check or None))
                 continue
             if not finding.quote.strip():
                 result.dropped.append(DroppedFinding(rule_code=rule.code, quote="", reason="empty_quote"))
@@ -341,7 +342,8 @@ def _verify(
         if not answer.data.risk:
             log.info("analysis: второй взгляд не подтвердил %s: %s | %.80s", cand.rule_code, answer.data.check,
                      cand.quote)
-            dropped.append(DroppedFinding(rule_code=cand.rule_code, quote=cand.quote, reason="not_confirmed"))
+            dropped.append(DroppedFinding(rule_code=cand.rule_code, quote=cand.quote, reason="not_confirmed",
+                                          note=answer.data.check or None))
             rejected.add(id(cand))
     return rejected
 

@@ -283,6 +283,15 @@ def set_batch_passport(s: Session, batch_id, passport: dict) -> dict:
     return {"subject": batch.subject, "meta": batch.meta}
 
 
+def set_batch_brief(s: Session, batch_id, brief: dict) -> None:
+    """Вывод по пакету (`ml.package_brief`) в `batch.meta`: открывается без нового вызова модели."""
+    batch = s.get(Batch, as_uuid(batch_id))
+    if batch is None:
+        raise NotFound("Пакет не найден")
+    batch.meta = {**(batch.meta or {}), "brief": brief}
+    s.flush()
+
+
 def pin_batch_rules(s: Session, batch_id) -> int:
     """На старте пакета: включённые правила профиля в их текущих версиях. Повтор заменяет набор."""
     batch = s.get(Batch, as_uuid(batch_id))

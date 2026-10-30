@@ -38,6 +38,13 @@ class CorruptedFileError(ExtractionError):
     default_message = "Файл повреждён и не открывается"
 
 
+class NoTextError(ExtractionError):
+    """Текста нет: документ нельзя считать проверенным, иначе пустой скан станет «Без рисков»."""
+
+    code = "no_text"
+    default_message = "В документе не найден текст: страницы пустые или скан не читается — документ не проверен"
+
+
 class TooManyPagesError(ExtractionError):
     code = "too_many_pages"
     default_message = "В документе больше 500 страниц — такой объём не проверяется"

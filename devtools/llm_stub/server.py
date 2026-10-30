@@ -10,7 +10,10 @@
 - `batch_meta` — предмет закупки по строке «Наименование объекта закупки: …»;
 - `procurement_passport` — поля паспорта по ключевым словам («срок поставки», «обеспечение исполнения»);
 - `clarification_request` — по вопросу на каждую находку;
-- `package_conflicts` — условия без противоречий: межфайловая проверка в заглушке ничего не находит.
+- `package_conflicts` — условия без противоречий: межфайловая проверка в заглушке ничего не находит;
+- `package_answer` — предложение из фрагментов, где больше всего слов вопроса;
+- `package_brief` — вывод из первых рисков списка;
+- `rule_draft` — правило из описания риска по образцу чек-листа.
 
 Цитаты всегда берутся из текста запроса, как у честной модели, поэтому проходят привязку к блокам.
 Качество находок здесь не проверяется — только то, что конвейер доходит до находок, цветов и счётчиков.
@@ -218,7 +221,38 @@ def package_conflicts(prompt: str) -> dict:
     return {"conditions": []}
 
 
+def package_answer(prompt: str) -> dict:
+    head, _, question = prompt.partition("Вопрос:")
+    wanted = _stems(question.partition("Верни JSON")[0])
+    best: tuple[int, int, str] | None = None
+    for index, text in _fragments(head.partition("Фрагменты документов:")[2]).items():
+        for sentence in _sentences(text):
+            score = len(wanted & _stems(sentence))
+            if score and (best is None or score > best[0]):
+                best = (score, index, sentence)
+    if best is None:
+        return {"found": False, "answer": "", "citations": []}
+    return {"found": True, "answer": f"Ответ заглушки LLM: {best[2]}", "citations": [{"fragment": best[1], "quote": best[2]}]}
+
+
+def package_brief(prompt: str) -> dict:
+    numbers = [int(n) for n in re.findall(r"^\[(\d+)\]", prompt, re.M)][:3]
+    return {"summary": "Вывод заглушки LLM: настоящая модель не вызывалась, проверьте находки вручную.", "top": numbers,
+            "actions": ["Направить запрос о разъяснении по отмеченным условиям."]}
+
+
+def rule_draft(prompt: str) -> dict:
+    about = prompt.partition("Описание риска:")[2].partition("Верни JSON")[0].strip()[:200] or "риск"
+    return {"title": about[:80], "description": f"Черновик заглушки LLM: {about}", "level": "warning",
+            "prompt_template": f"Проверь {{фрагмент}}: найди условия о том, что описано так: {about}. Риск — только если "
+                               "условие прямо это предусматривает. Не риск: условия о другом.",
+            "variables": [], "risk_example": about, "safe_example": "Условие без этого риска."}
+
+
 ANSWERS = {
+    "package_answer": package_answer,
+    "package_brief": package_brief,
+    "rule_draft": rule_draft,
     "package_conflicts": package_conflicts,
     "risk_findings": risk_findings,
     "finding_verdict": finding_verdict,

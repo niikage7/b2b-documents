@@ -131,6 +131,7 @@ class DroppedFinding(BaseModel):
     quote: str
     reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk", "not_confirmed"]
     best_score: float | None = None
+    note: str | None = Field(None, description="Как модель сравнила условие с правилом (`check`)")
 
 
 class LLMUsage(BaseModel):
@@ -230,6 +231,61 @@ class PackageCheckResult(BaseModel):
     usage: LLMUsage = Field(default_factory=LLMUsage)
 
 
+class PackageAnswer(BaseModel):
+    """Ответ на вопрос по документам пакета: `citations` привязаны к блокам, иначе `found=false`."""
+
+    found: bool
+    answer: str
+    citations: list[FindingRef] = Field(default_factory=list)
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class BriefRisk(BaseModel):
+    finding_id: str | None = None
+    document_id: str | None = None
+    title: str
+    level: Level
+    document: str | None = None
+    section_number: str | None = None
+    page: int | None = None
+    quote: str = ""
+
+
+class PackageBrief(BaseModel):
+    """Вывод по пакету для руководителя. `decision` считает код по находкам, текст пишет модель."""
+
+    decision: Literal["go", "caution", "clarify"]
+    decision_label: str
+    summary: str
+    top_risks: list[BriefRisk] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    not_checked: int = Field(0, description="Документов не проверено из-за ошибки: вывод по ним неполный")
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class RuleDraftResult(BaseModel):
+    """Черновик правила из описания риска; прошёл `validate_rule`, ничего не сохранено."""
+
+    title: str
+    description: str
+    level: Level
+    kind: RuleKind
+    prompt_template: str
+    variables: list[RuleVariable] = Field(default_factory=list)
+    risk_example: str = ""
+    safe_example: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
+class RuleTestDropped(BaseModel):
+    """Что модель рассмотрела, но в находки не попало: методолог видит, почему правило промолчало."""
+
+    quote: str
+    reason: str = Field(description="Причина на русском")
+    note: str | None = Field(None, description="Как модель сравнила условие с правилом")
+
+
 class RuleTestFinding(BaseModel):
     quote: str
     block_id: str
@@ -249,3 +305,4 @@ class RuleTestResult(BaseModel):
     findings: list[RuleTestFinding]
     duration_ms: int
     dropped: int = Field(0, description="Сколько ответов LLM отброшено: цитата не нашлась в тексте")
+    considered: list[RuleTestDropped] = Field(default_factory=list)

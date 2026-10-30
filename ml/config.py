@@ -72,6 +72,8 @@ class Settings:
     # полнота на трудных пунктах 0,93 против 0,78, 20 страниц — 8 с против 10 с
     llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "deepseek/deepseek-v4.1-flash-1017"))
     llm_meta_model: str = field(default_factory=lambda: _env("LLM_META_MODEL", ""))
+    # Запасная модель: один вызов после того, как основная не ответила на все повторы. Пусто — без неё
+    llm_fallback_model: str = field(default_factory=lambda: _env("LLM_FALLBACK_MODEL", ""))
     llm_timeout: float = field(default_factory=lambda: _env_float("LLM_TIMEOUT", 90))
     llm_max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
     llm_max_concurrency: int = field(default_factory=lambda: _env_int("LLM_MAX_CONCURRENCY", 8))

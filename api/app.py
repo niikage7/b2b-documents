@@ -10,7 +10,7 @@ from fastapi import APIRouter, FastAPI
 
 from api.config import get_settings
 from api.errors import install_error_handlers
-from api.routers import auth, batches, documents, exports, rules, system
+from api.routers import assist, auth, batches, documents, exports, rules, system
 from worker import jsonlog
 
 # Идентификаторы для журнала берутся из пути запроса
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
     app.add_middleware(LogContextMiddleware)
     api = APIRouter(prefix="/api")
+    api.include_router(assist.router)
     api.include_router(auth.router)
     api.include_router(batches.router)
     api.include_router(documents.router)

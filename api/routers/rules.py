@@ -222,7 +222,8 @@ def test_rule(body: RuleTestIn, user: Methodologist, s: DbSession) -> dict:
     result = answer["result"]
     findings = [{k: v for k, v in f.items() if k != "confidence"}
                 | {"confidence_level": derived.confidence_level(f.get("confidence"))} for f in result["findings"]]
-    return {"findings": findings, "duration_ms": result["duration_ms"], "dropped": result.get("dropped", 0)}
+    return {"findings": findings, "duration_ms": result["duration_ms"], "dropped": result.get("dropped", 0),
+            "considered": result.get("considered", [])}
 
 
 test_rule.__test__ = False  # не тест pytest, несмотря на имя

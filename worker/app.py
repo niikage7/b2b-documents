@@ -32,10 +32,12 @@ ROUTES = {
     "worker.tasks.extract_passport": "analysis",
     "worker.tasks.check_package": "analysis",
     "worker.tasks.rule_test": "analysis",
+    "worker.tasks.assist": "analysis",
     "worker.exports.export_document": "export",
     "worker.exports.export_batch": "export",
     "worker.exports.export_batch_document": "export",
     "worker.exports.build_batch_zip": "export",
+    "worker.exports.export_clarification": "export",
     "worker.maintenance.cleanup_expired": "ingest",
 }
 

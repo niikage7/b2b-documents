@@ -6,6 +6,7 @@
   затем обычный текст; ответ всегда проверяется по схеме Pydantic, неверный ответ
   один раз отправляется модели на исправление;
 - учёт токенов (в том числе рассуждений) и стоимости, кеш ответов на диске;
+- запасная модель `LLM_FALLBACK_MODEL` на случай, когда основная не отвечает;
 - рассуждения модели задаются `LLM_REASONING` (параметр `reasoning.effort` OpenRouter):
   они входят в `max_tokens` и занимают большую часть времени ответа. Модель, которая
   параметр не принимает, дальше вызывается без него.
@@ -195,6 +196,10 @@ class LLMClient:
                     raise _client_error(response)
             if attempt + 1 < attempts:
                 time.sleep(min(20.0, 2**attempt) * (0.5 + random.random()))
+        fallback = settings.llm_fallback_model
+        if fallback and payload.get("model") != fallback:
+            log.warning("llm: %s не ответила на %d попыток, запасная модель %s", payload.get("model"), attempts, fallback)
+            return self._post({**payload, "model": fallback})
         raise LLMError(detail=str(last)) from last
 
     def chat(
