@@ -145,7 +145,7 @@ def test_rerun_keeps_subject_and_passport(s, env, author, fake_llm, contract, no
     run_batch(batch_id)
     fake_llm.requests = []
     tasks.rerun_batch(batch_id, batches.rerun_batch(s, batch_id))
-    assert set(schema_names(fake_llm)) == {"risk_findings"}  # предмет и паспорт уже есть
+    assert set(schema_names(fake_llm)) == {"risk_findings", "package_conflicts"}  # предмет и паспорт уже есть
     assert s.get(Batch, batch_id).status == "done"
 
 
@@ -212,3 +212,34 @@ def test_rule_test_returns_ml_error(env):
     out = tasks.rule_test.apply(args=({"rule": r04(), "text": "а" * 20_001},)).get()
     assert out == {"error": {"code": "text_too_long", "message": "Текст для проверки длиннее 20 000 символов",
                              "retryable": False}}
+
+
+def test_package_checks_in_pipeline_keep_lawyer_decision(env, s, author, fake_llm):
+    """Находки проверки пакета пишутся в БД, не исчезают при повторном анализе, решение юриста остаётся."""
+    from docx import Document as Docx
+
+    from db import findings as findings_db
+
+    def make(path):
+        doc = Docx()
+        doc.add_paragraph("Контракт на поставку")
+        doc.add_paragraph("Поставка товара в течение 10 (пятнадцати) рабочих дней.")
+        doc.save(path)
+        return path
+
+    batch_id = make_batch(s, env, author, [("contract.docx", sample_bytes(make, ".docx"))])
+    run_batch(batch_id)
+    doc = docs_of(s, batch_id)["contract.docx"]
+    assert "check_package" in stages(s, batch_id)
+    rows = [f for f in ai_findings(s, doc.id) if f.check_code == "A-01"]
+    assert len(rows) == 1 and rows[0].quote == "10 (пятнадцати)"
+    s.expire_all()
+    assert s.get(Document, doc.id).worst_level == "warning"
+    view = findings_db.findings_payload(s, rows)[0]
+    assert view["rule"] == {"id": None, "code": "A-01", "title": "Число цифрами не совпадает с прописью"}
+    assert view["check_code"] == "A-01" and view["from_scan"] is False
+
+    findings_db.update_finding(s, rows[0].id, actor_id=author.id, version=rows[0].version, status="rejected")
+    tasks.rerun_batch(str(batch_id), [str(doc.id)])
+    again = [f for f in ai_findings(s, doc.id) if f.check_code == "A-01"]
+    assert [(f.id, f.status) for f in again] == [(rows[0].id, "rejected")]

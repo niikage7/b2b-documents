@@ -15,6 +15,7 @@
     analyze_rule_group(document_id, group)  analysis  кандидаты в находки одной группы → analysis/group-NN.json
     merge_findings(document_id)             analysis  находки ИИ всех групп → БД; документ done, цвет и счётчики
     extract_passport(batch_id, doc_ids)     analysis  паспорт закупки → batch.meta, параллельно с анализом
+    check_package(batch_id)                 analysis  проверки без LLM и противоречия между документами → finding
     finalize_batch(batch_id)                ingest    статус и счётчики пакета
     rule_test(payload)                      analysis  тест правила с экрана «Правила», без записи в БД
 
@@ -22,7 +23,7 @@
 
     unpack_batch
       → chord(group(extract_text | build_structure | index_chunks, ...), extract_batch_meta)
-      → chord(group(analyze_document, ..., extract_passport), finalize_batch)
+      → chord(group(analyze_document, ..., extract_passport, check_package), finalize_batch)
     analyze_document → chord(group(analyze_rule_group по группам правил), merge_findings)
 
 Анализ ждёт текст всех документов пакета: предмет закупки входит в запрос каждого правила, а берётся он
@@ -66,6 +67,7 @@ from typing import Any
 from celery import chain, chord
 from celery.canvas import Signature
 from celery.signals import task_failure
+from sqlalchemy import select
 
 import ml
 from contracts.analysis import RuleGroupResult, RuleSpec
@@ -273,8 +275,6 @@ def restart_stage(s, document_id) -> str:
     правил последней может закончиться успешная группа; здесь — последняя запись с ошибкой.
     Записи нет (файл не прошёл проверку на входе) — с начала.
     """
-    from sqlalchemy import select
-
     from db.models import TaskRun
 
     stage = s.scalar(select(TaskRun.stage)
@@ -581,6 +581,7 @@ def extract_batch_meta(self, batch_id: str, document_ids: list[str]):
         header.append(extract_passport.si(batch_id, ids))
     if not header:
         return self.replace(finalize_batch.si(batch_id))
+    header.append(check_package.si(batch_id))
     return self.replace(chord(header, finalize_batch.si(batch_id)))
 
 
@@ -621,6 +622,32 @@ def _extract_passport(batch_id: str, ids: list[str]) -> None:
         with runtime.session_scope() as s:
             meta = pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"))
         progress.publish_batch_meta(batch_id, meta)
+
+
+@celery_app.task(name="worker.tasks.check_package")
+def check_package(batch_id: str) -> None:
+    """Цифры против прописи, реквизиты, проценты от НМЦК и противоречия между документами (FR-4.4*)."""
+    _batch_stage(batch_id, "check_package", lambda: _check_package(batch_id))
+
+
+def _check_package(batch_id: str) -> None:
+    with runtime.session_scope() as s:
+        ids = [str(d) for d in s.scalars(select(Document.id).where(Document.batch_id == pipeline.as_uuid(batch_id),
+                                                                   Document.status != "error"))]
+    documents = [d for d in _ready_documents(ids) if d[2]]
+    if not documents:
+        return
+    result = ml.check_package(documents, search=_search([d for d, _, _ in documents]), llm=runtime.get_llm())
+    events_out = []
+    with runtime.session_scope() as s:
+        changed = pipeline.save_package_findings(s, batch_id, result.findings)
+        for document_id, recalc in changed.items():
+            doc = s.get(Document, pipeline.as_uuid(document_id))
+            if doc is not None and doc.status == "done":
+                events_out.append(progress.document_done_event(s, document_id, recalc))
+    for event in events_out:
+        progress.publish_document_done(batch_id, event)
+    log.info("check_package: пакет %s: находок %d, $%.4f", batch_id, len(result.findings), result.usage.cost)
 
 
 def _group_name(index: int) -> str:

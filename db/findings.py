@@ -115,6 +115,7 @@ def findings_payload(s: Session, findings: Sequence[Finding], *, viewer_id=None)
 
     order: dict[uuid.UUID, int] = {}
     doc_ids = {f.document_id for f in findings}
+    doc_kinds = dict(s.execute(select(Document.id, Document.kind).where(Document.id.in_(doc_ids))).all())
     active = s.execute(
         select(Finding.id, Finding.document_id).join(BlockRow, BlockRow.id == Finding.block_id)
         .where(Finding.document_id.in_(doc_ids), Finding.status != "rejected")
@@ -141,7 +142,14 @@ def findings_payload(s: Session, findings: Sequence[Finding], *, viewer_id=None)
             "status": f.status,
             "level": f.level,
             "original_level": f.original_level,
-            "rule": {"id": str(rule.id), "code": rule.code, "title": rule.title} if rule else None,
+            "rule": ({"id": str(rule.id), "code": rule.code, "title": rule.title} if rule else
+                     # Встроенная проверка пакета выглядит как правило, но открыть её нельзя: своего id нет
+                     {"id": None, "code": f.check_code, "title": f.check_title or f.check_code}
+                     if f.check_code else None),
+            "check_code": f.check_code,
+            "related": f.related or [],
+            # Текст распознан: «30 дней» могло стать «80 дней», юристу стоит сверить значение с оригиналом
+            "from_scan": bool(block and (block.low_ocr_quality or doc_kinds.get(f.document_id) == "scan")),
             "block_id": str(f.block_id),
             "start": f.start,
             "end": f.end,

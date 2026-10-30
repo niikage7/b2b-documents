@@ -31,6 +31,7 @@ _EXPORTS = {
     "test_rule": "ml.analysis.rule_test",
     "extract_batch_meta": "ml.analysis.batch_meta",
     "extract_passport": "ml.analysis.passport",
+    "check_package": "ml.analysis.crosscheck",
     "draft_clarification": "ml.analysis.clarification",
     "render_clarification_docx": "ml.analysis.clarification",
     "load_default_checklist": "ml.checklist",

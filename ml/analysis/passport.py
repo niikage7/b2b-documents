@@ -140,9 +140,13 @@ def select_fragments(
     embedder: Embedder | None = None,
     fields: Sequence[FieldSpec] = FIELDS,
     budget_tokens: int = FIELD_BUDGET_TOKENS,
+    per_document: bool = False,
 ) -> list[PassportFragment]:
     """Фрагменты документов пакета, которые получит LLM: для каждого поля — найденные гибридным
-    поиском в пределах бюджета. Отдельно от вызова LLM, чтобы стенд мерил поиск бесплатно."""
+    поиском в пределах бюджета. Отдельно от вызова LLM, чтобы стенд мерил поиск бесплатно.
+
+    `per_document` — бюджет на поле и документ, а не на поле в пакете: межфайловой проверке нужно
+    значение из каждого документа, а не лучшее по пакету."""
     if not documents:
         return []
     store = search
@@ -172,7 +176,7 @@ def select_fragments(
         used = 0
         for doc_id, hit in hits:
             tokens = estimate_tokens(hit.text)
-            if used and used + tokens > budget_tokens:
+            if not per_document and used and used + tokens > budget_tokens:
                 break
             select_hit(selected[doc_id], hit)
             used += tokens

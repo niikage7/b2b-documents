@@ -55,7 +55,9 @@ class FakeLLM:
 
     def __init__(self, plan: dict[str, list[tuple[str, str]]] | None = None, *, invent: dict | None = None,
                  safe: dict[str, list[str]] | None = None, delay: float = 0.0,
-                 passport: dict[str, tuple[str, str]] | None = None, reject: list[str] | None = None):
+                 passport: dict[str, tuple[str, str]] | None = None, reject: list[str] | None = None,
+                 conflicts: dict[str, list[tuple[str, str]]] | None = None):
+        self.conflicts = conflicts or {}
         self.plan = plan or {}
         self.invent = invent or {}
         self.safe = safe or {}
@@ -87,6 +89,12 @@ class FakeLLM:
             fields = [{"key": key, "value": value, "fragment": _fragment_of(prompt, quote), "quote": quote}
                       for key, (value, quote) in self.passport.items()]
             return _ok(json.dumps({"fields": fields}, ensure_ascii=False))
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "package_conflicts":
+            conditions = [
+                {"key": key, "values": [{"fragment": _fragment_of(prompt, q), "value": v, "quote": q} for v, q in values],
+                 "contradiction": True, "explanation": "Значения расходятся.", "recommendation": "Запросить разъяснение."}
+                for key, values in self.conflicts.items()]
+            return _ok(json.dumps({"conditions": conditions}, ensure_ascii=False))
         codes = re.findall(r"^### (R-\d+)\.", prompt, re.M)
         rules = []
         for code in codes:

@@ -9,7 +9,8 @@
 - `finding_verdict` (второй взгляд на находку) — находка всегда подтверждается;
 - `batch_meta` — предмет закупки по строке «Наименование объекта закупки: …»;
 - `procurement_passport` — поля паспорта по ключевым словам («срок поставки», «обеспечение исполнения»);
-- `clarification_request` — по вопросу на каждую находку.
+- `clarification_request` — по вопросу на каждую находку;
+- `package_conflicts` — условия без противоречий: межфайловая проверка в заглушке ничего не находит.
 
 Цитаты всегда берутся из текста запроса, как у честной модели, поэтому проходят привязку к блокам.
 Качество находок здесь не проверяется — только то, что конвейер доходит до находок, цветов и счётчиков.
@@ -213,7 +214,12 @@ def finding_verdict(prompt: str) -> dict:
     return {"check": "Условие подтверждено заглушкой", "risk": True}
 
 
+def package_conflicts(prompt: str) -> dict:
+    return {"conditions": []}
+
+
 ANSWERS = {
+    "package_conflicts": package_conflicts,
     "risk_findings": risk_findings,
     "finding_verdict": finding_verdict,
     "batch_meta": batch_meta,

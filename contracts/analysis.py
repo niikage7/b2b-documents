@@ -185,6 +185,51 @@ class ProcurementPassport(BaseModel):
         return next((f.value for f in self.fields if f.key == key), None)
 
 
+class FindingRef(BaseModel):
+    """Другое место в пакете, с которым связана находка: второй документ противоречия (FR-4.4*)."""
+
+    document_id: str
+    filename: str | None = None
+    block_id: str
+    start: int
+    end: int
+    quote: str = Field(description="Ровно `block.text[start:end]`")
+    value: str | None = Field(None, description="Значение условия в этом месте: «45 календарных дней»")
+    page: int | None = None
+    section_number: str | None = None
+
+
+class PackageFinding(BaseModel):
+    """Находка проверки пакета: не правило чек-листа, а встроенная проверка (`code`: A-01, X-01).
+
+    `related` — другие места того же условия: находка противоречия лежит в каждом из документов и ссылается
+    на остальные.
+    """
+
+    code: str
+    title: str
+    level: Level
+    document_id: str
+    filename: str | None = None
+    block_id: str
+    start: int
+    end: int
+    quote: str = Field(description="Ровно `block.text[start:end]`")
+    explanation: str
+    recommendation: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    page: int | None = None
+    section_number: str | None = None
+    related: list[FindingRef] = Field(default_factory=list)
+
+
+class PackageCheckResult(BaseModel):
+    """Результат `check_package`: находки без LLM и межфайловые, учёт токенов."""
+
+    findings: list[PackageFinding] = Field(default_factory=list)
+    usage: LLMUsage = Field(default_factory=LLMUsage)
+
+
 class RuleTestFinding(BaseModel):
     quote: str
     block_id: str

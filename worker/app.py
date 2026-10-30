@@ -30,6 +30,7 @@ ROUTES = {
     "worker.tasks.analyze_rule_group": "analysis",
     "worker.tasks.merge_findings": "analysis",
     "worker.tasks.extract_passport": "analysis",
+    "worker.tasks.check_package": "analysis",
     "worker.tasks.rule_test": "analysis",
     "worker.exports.export_document": "export",
     "worker.exports.export_batch": "export",

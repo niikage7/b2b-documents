@@ -10,6 +10,8 @@
 - У `chunk` нет индекса HNSW: поиск идёт внутри одного документа, фрагменты читаются
   целиком и ранжируются в `ml.analysis.search`.
 - `finding_event.actor_id` пуст у событий, которые записала система (находки ИИ).
+- `finding.check_code`, `check_title`, `related` — находка встроенной проверки пакета, а не правила
+  чек-листа: цифры против прописи (A-01), противоречие между документами (X-01) со ссылками на другие места.
 """
 
 from __future__ import annotations
@@ -323,6 +325,9 @@ class Finding(Base):
     recommendation: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
     comment: Mapped[str | None] = mapped_column(Text)
+    check_code: Mapped[str | None] = mapped_column(String(20))
+    check_title: Mapped[str | None] = mapped_column(String(300))
+    related: Mapped[list | None] = mapped_column(JSONB)
     author_id: Mapped[uuid.UUID | None] = _fk("user.id", nullable=True)
     decided_by: Mapped[uuid.UUID | None] = _fk("user.id", nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

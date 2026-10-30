@@ -19,7 +19,13 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from contracts.analysis import FindingCandidate, RuleGroupResult, RuleSpec, RuleVariable
+from contracts.analysis import (
+    FindingCandidate,
+    PackageFinding,
+    RuleGroupResult,
+    RuleSpec,
+    RuleVariable,
+)
 from contracts.document import Block, ChunkRecord
 from contracts.extraction import BBox, ExtractionResult, SourceMap
 from db import derived
@@ -318,11 +324,12 @@ def batch_rules(s: Session, batch_id) -> list[RuleSpec]:
 def merge_findings(s: Session, document_id, results: Iterable[RuleGroupResult]) -> dict:
     """Этап `merge_findings`: находки ИИ документа заменяются кандидатами из групп правил.
 
-    Ручные пометки сохраняются. Документ становится `done`, цвет и счётчики пересчитываются;
-    возвращается результат `recalc` — данные для события `document.done`.
+    Ручные пометки и находки проверок пакета (`save_package_findings`) сохраняются. Документ становится
+    `done`, цвет и счётчики пересчитываются; возвращается результат `recalc` — данные для `document.done`.
     """
     doc = _document(s, document_id)
-    s.execute(delete(Finding).where(Finding.document_id == doc.id, Finding.source == "ai"))
+    s.execute(delete(Finding).where(Finding.document_id == doc.id, Finding.source == "ai",
+                                    Finding.check_code.is_(None)))
     candidates: list[FindingCandidate] = [c for r in results for c in r.candidates]
     known = set(s.scalars(select(BlockRow.id).where(BlockRow.document_id == doc.id)))
     for cand in candidates:
@@ -348,6 +355,48 @@ def merge_findings(s: Session, document_id, results: Iterable[RuleGroupResult]) 
     doc.finished_at = now()
     s.flush()
     return recalc(s, doc.id)
+
+
+def save_package_findings(s: Session, batch_id, findings: Sequence[PackageFinding]) -> dict[str, dict]:
+    """Этап `check_package`: находки встроенных проверок пакета заменяются новыми.
+
+    Находка на том же месте остаётся вместе с решением юриста; нерассмотренные находки, которых больше нет,
+    удаляются. Этап идёт параллельно с анализом: цвет считается по документам, которые уже `done`, остальные
+    посчитает `merge_findings`. Возвращает `recalc` по документам, где что-то изменилось.
+    """
+    batch = as_uuid(batch_id)
+    old = list(s.scalars(select(Finding).where(Finding.batch_id == batch, Finding.check_code.is_not(None))))
+    existing = {(f.check_code, f.block_id, f.start, f.end): f for f in old}
+    documents = set(s.scalars(select(Document.id).where(Document.batch_id == batch)))
+    changed: set[uuid.UUID] = set()
+    keep: set[uuid.UUID] = set()
+    for item in findings:
+        document_id, block_id = as_uuid(item.document_id), as_uuid(item.block_id)
+        if document_id not in documents:
+            continue
+        related = [r.model_dump(mode="json") for r in item.related] or None
+        found = existing.get((item.code, block_id, item.start, item.end))
+        if found is not None:
+            found.related = related
+            found.check_title = item.title
+            keep.add(found.id)
+            continue
+        finding = Finding(batch_id=batch, document_id=document_id, source="ai", level=item.level,
+                          original_level=item.level, status="new", block_id=block_id, start=item.start, end=item.end,
+                          quote=item.quote, explanation=item.explanation, recommendation=item.recommendation,
+                          confidence=item.confidence, check_code=item.code, check_title=item.title, related=related)
+        s.add(finding)
+        s.flush()
+        keep.add(finding.id)
+        changed.add(document_id)
+        s.add(FindingEvent(finding_id=finding.id, actor_id=None, action="created",
+                           new={"level": item.level, "status": "new", "rule_code": item.code}))
+    for finding in old:
+        if finding.id not in keep and finding.status == "new":
+            changed.add(finding.document_id)
+            s.delete(finding)
+    s.flush()
+    return {str(d): recalc(s, d) for d in changed}
 
 
 def finish_batch(s: Session, batch_id) -> dict:
