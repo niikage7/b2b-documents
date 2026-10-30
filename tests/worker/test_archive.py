@@ -9,7 +9,7 @@ from pathlib import Path
 from worker.archive import Limits, Unpacker
 
 
-def make_zip(path: Path, entries: dict[str, bytes], *, utf8: bool = True) -> Path:
+def make_zip(path: Path, entries: dict[str, bytes], *, utf8: bool = True, encoding: str = "cp866") -> Path:
     buf = io.BytesIO()
     placeholders: dict[bytes, bytes] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -17,9 +17,9 @@ def make_zip(path: Path, entries: dict[str, bytes], *, utf8: bool = True) -> Pat
             if utf8 or name.isascii():
                 zf.writestr(name, data)
                 continue
-            # Имя в cp866 без флага UTF-8, как в архивах русской Windows: ASCII-метка той же длины,
-            # затем подмена её байтами cp866 в заголовках
-            encoded = name.encode("cp866")
+            # Имя в `encoding` без флага UTF-8 (cp866 — архивы русской Windows, utf-8 — `zip` на macOS):
+            # ASCII-метка той же длины, затем подмена её байтами в заголовках
+            encoded = name.encode(encoding)
             marker = f"{i:0{len(encoded)}d}".encode()
             placeholders[marker] = encoded
             zf.writestr(marker.decode(), data)
@@ -111,6 +111,13 @@ def test_cp866_names(tmp_path):
     archive = make_zip(tmp_path / "a.zip", {"Документы/Договор.pdf": b"%PDF"}, utf8=False)
     got, _ = run(tmp_path, archive)
     assert set(got) == {"Документы/Договор.pdf"}
+
+
+def test_utf8_names_without_flag(tmp_path):
+    archive = make_zip(tmp_path / "a.zip", {"Документы/Проект контракта.docx": b"PK"}, utf8=False, encoding="utf-8")
+    assert zipfile.ZipFile(archive).infolist()[0].flag_bits & 0x800 == 0
+    got, _ = run(tmp_path, archive)
+    assert set(got) == {"Документы/Проект контракта.docx"}
 
 
 def test_corrupted_archive_is_reported(tmp_path):

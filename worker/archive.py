@@ -48,13 +48,19 @@ class Limits:
 
 
 def entry_name(info: zipfile.ZipInfo) -> str:
-    """Имя записи: без флага UTF-8 Python читает его как cp437, а русские архивы Windows пишут cp866."""
+    """Имя записи: без флага UTF-8 Python читает его как cp437. Исходные байты — это UTF-8 (`zip` на macOS
+    и Linux флаг не ставит) или cp866 (русская Windows); случайно валидный UTF-8 из cp866 практически невозможен."""
     name = info.filename
     if not info.flag_bits & 0x800:
         try:
-            name = name.encode("cp437").decode("cp866")
-        except (UnicodeEncodeError, UnicodeDecodeError):
+            raw = name.encode("cp437")
+        except UnicodeEncodeError:
             pass
+        else:
+            try:
+                name = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                name = raw.decode("cp866", errors="replace")
     return name.replace("\\", "/")
 
 
