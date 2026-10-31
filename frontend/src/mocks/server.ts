@@ -42,8 +42,10 @@ import {
   canTransition,
   documentCard,
   documentView,
+  findingOriginal,
   findingsPayload,
   hits30d,
+  PAGE_VIEW_KINDS,
   ruleReview,
   me,
   NEXT_STAGE_LABELS,
@@ -502,6 +504,14 @@ export function createMockTransport(): MockTransport {
     persist();
     recalc(state, getDoc(f.document_id));
     return [204];
+  });
+
+  route('GET', '/findings/:id/source', (ctx) => {
+    const f = getFinding(ctx.params.id);
+    if (!PAGE_VIEW_KINDS.includes(getDoc(f.document_id).kind)) {
+      throw new HttpError(409, 'conflict', 'Оригинал страницы можно показать только для PDF и сканов');
+    }
+    return findingOriginal(state, f);
   });
 
   route('GET', '/findings/:id/history', (ctx) => {

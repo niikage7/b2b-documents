@@ -1,3 +1,5 @@
+import { seedState } from '../mocks/state';
+import { findingOriginal, findingsPayload, PAGE_VIEW_KINDS } from '../mocks/views';
 import { daysUntil, deadlineText } from '../pages/BatchPage';
 import { layoutCallouts } from '../lib/calloutLayout';
 import { countLabel, formatEta, formatWhen } from '../lib/format';
@@ -276,5 +278,29 @@ describe('срок подачи заявок', () => {
     expect(deadlineText('2026-11-05T10:00', now)).toBe('До окончания подачи заявок: 5 дн.');
     expect(deadlineText('2026-10-31', now)).toBe('Подача заявок заканчивается сегодня');
     expect(deadlineText('2026-10-30', now)).toBe('Срок подачи заявок прошёл');
+  });
+});
+
+describe('сверка с оригиналом в моке', () => {
+  const state = seedState();
+  const kindOf = (documentId: string) => state.documents.find((d) => d.id === documentId)?.kind;
+
+  it('рамки цитаты — доли размера страницы, картинка без сервера', () => {
+    const finding = state.findings.find((f) => kindOf(f.document_id) === 'pdf' || kindOf(f.document_id) === 'scan')!;
+    const original = findingOriginal(state, finding);
+    expect(original.image_url.startsWith('data:image/svg+xml')).toBe(true);
+    expect(original.rects.length).toBeGreaterThan(0);
+    for (const r of original.rects) {
+      expect(r.x0).toBeGreaterThanOrEqual(0);
+      expect(r.x1).toBeLessThanOrEqual(1);
+      expect(r.y0).toBeLessThan(r.y1);
+    }
+  });
+
+  it('признак доступности зависит от вида документа', () => {
+    const payload = findingsPayload(state, state.findings, null);
+    for (const f of payload) expect(f.source_available).toBe(PAGE_VIEW_KINDS.includes(kindOf(f.document_id) ?? ''));
+    expect(payload.some((f) => f.source_available)).toBe(true);
+    expect(payload.some((f) => !f.source_available)).toBe(true);
   });
 });

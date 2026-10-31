@@ -6,6 +6,7 @@ import type {
   DocumentCard,
   DocumentView,
   Finding,
+  FindingOriginal,
   FindingStatus,
   Level,
   Recalc,
@@ -14,6 +15,7 @@ import type {
 } from '../api/types';
 import type { MBatch, MDocument, MFinding, MockState, MRule, MUser } from './state';
 
+export const PAGE_VIEW_KINDS: string[] = ['pdf', 'scan'];
 const SEVERITY: Record<string, number> = { critical: 2, warning: 1 };
 const DOCUMENT_ORDER: Record<string, number> = { critical: 0, warning: 1, ok: 2, null: 3, not_checked: 4 };
 
@@ -245,6 +247,7 @@ export function findingsPayload(state: MockState, findings: MFinding[], viewerId
       level: f.level,
       original_level: f.original_level,
       rule: rule ? { id: rule.id, code: rule.code, title: rule.title } : null,
+      source_available: PAGE_VIEW_KINDS.includes(state.documents.find((d) => d.id === f.document_id)?.kind ?? ''),
       block_id: f.block_id,
       start: f.start,
       end: f.end,
@@ -319,13 +322,54 @@ export function recalc(state: MockState, doc: MDocument): Recalc {
   };
 }
 
+function inLiveBatch(state: MockState, f: MFinding): boolean {
+  return state.batches.some((b) => b.id === f.batch_id && !b.deleted);
+}
+
 export function hits30d(state: MockState, ruleId: string): number {
   const since = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
-  return state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai' && f.created_at >= since).length;
+  return state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai' && f.created_at >= since && inLiveBatch(state, f)).length;
+}
+
+const ORIGINAL = { width: 595, margin: 56, line: 15, chars: 78, charWidth: 6, fontSize: 10 };
+
+/** Страница оригинала в моке: текст блоков страницы картинкой SVG, рамки цитаты — доли её размера, как у API. */
+export function findingOriginal(state: MockState, f: MFinding): FindingOriginal {
+  const { width, margin, line, chars, charWidth, fontSize } = ORIGINAL;
+  const target = state.blocks.find((b) => b.id === f.block_id)!;
+  const blocks = state.blocks.filter((b) => b.document_id === f.document_id && b.page === target.page).sort((a, b) => a.order - b.order);
+  const texts: string[] = [];
+  const marks: { x0: number; y0: number; x1: number; y1: number }[] = [];
+  let y = margin;
+  for (const block of blocks) {
+    for (let at = 0; at < block.text.length; at += chars) {
+      const piece = block.text.slice(at, at + chars);
+      const escaped = piece.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      texts.push(`<text x="${margin}" y="${y}" textLength="${piece.length * charWidth}" font-size="${fontSize}" font-family="monospace">${escaped}</text>`);
+      if (block.id === target.id && f.start < at + piece.length && f.end > at) {
+        marks.push({
+          x0: margin + (Math.max(f.start, at) - at) * charWidth,
+          y0: y - line + 3,
+          x1: margin + (Math.min(f.end, at + piece.length) - at) * charWidth,
+          y1: y + 3,
+        });
+      }
+      y += line;
+    }
+    y += line / 2;
+  }
+  const height = Math.max(842, y + margin);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><rect width="${width}" height="${height}" fill="white"/>${texts.join('')}</svg>`;
+  return {
+    page: target.page,
+    image_url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    aspect: width / height,
+    rects: marks.map((m) => ({ x0: m.x0 / width, y0: m.y0 / height, x1: m.x1 / width, y1: m.y1 / height })),
+  };
 }
 
 export function ruleReview(state: MockState, ruleId: string) {
-  const own = state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai');
+  const own = state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai' && inLiveBatch(state, f));
   const confirmed = own.filter((f) => f.status === 'accepted' || f.status === 'edited').length;
   const rejected = own.filter((f) => f.status === 'rejected').length;
   const decided = confirmed + rejected;
