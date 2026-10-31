@@ -303,3 +303,24 @@ def test_clarification_input(s, world):
     assert len(picked["findings"]) == 1
     draft = draft_clarification(data["findings"], subject=data["subject"], law=data["law"], use_llm=False)
     assert len(draft.items) == len(data["findings"]) and draft.items[0].section_number
+
+
+def test_rule_review_stats(s, world):
+    from sqlalchemy import select
+
+    from db.models import Finding
+
+    user = world["user"]
+    all_findings = s.scalars(select(Finding).where(Finding.document_id == world["doc"].id)).all()
+    target = all_findings[0]
+    own = [f for f in all_findings if f.rule_id == target.rule_id]
+    row = lambda: next(r for r in rules.list_rules(s) if r["id"] == str(target.rule_id))  # noqa: E731
+    assert row()["review"] == {"confirmed": 0, "rejected": 0, "precision": None, "noisy": False}
+
+    findings.update_finding(s, str(own[0].id), actor_id=user.id, version=own[0].version, status="rejected")
+    assert row()["review"] == {"confirmed": 0, "rejected": 1, "precision": 0.0, "noisy": False}
+    assert rules.get_rule(s, target.rule_id)["review"]["rejected"] == 1
+
+    assert rules._review_view({"confirmed": 1, "rejected": 4}) == {
+        "confirmed": 1, "rejected": 4, "precision": 0.2, "noisy": True}
+    assert not rules._review_view({"confirmed": 3, "rejected": 2})["noisy"]

@@ -626,8 +626,10 @@ def _extract_passport(batch_id: str, ids: list[str]) -> None:
     log.info("extract_passport: пакет %s: полей %d", batch_id, len(passport.fields))
     if passport.fields:
         # Пустой паспорт не пишется: повторный анализ попробует ещё раз
+        finance = ml.financial_load(passport.fields)
         with runtime.session_scope() as s:
-            meta = pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"))
+            meta = pipeline.set_batch_passport(s, batch_id, passport.model_dump(mode="json"),
+                                               finance=finance.model_dump(mode="json") if finance else None)
         progress.publish_batch_meta(batch_id, meta)
 
 

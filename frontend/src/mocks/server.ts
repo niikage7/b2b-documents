@@ -28,6 +28,7 @@ import {
   type MRule,
   nowIso,
   passportFields,
+  MOCK_FINANCE,
   resetState,
   saveState,
   TEMPLATES,
@@ -43,6 +44,7 @@ import {
   documentView,
   findingsPayload,
   hits30d,
+  ruleReview,
   me,
   NEXT_STAGE_LABELS,
   recalc,
@@ -668,7 +670,7 @@ export function createMockTransport(): MockTransport {
       .filter((r) => !search || r.code.toLowerCase().includes(search) || r.title.toLowerCase().includes(search))
       .filter((r) => !kind || r.kind === kind)
       .sort((a, b) => a.code.localeCompare(b.code))
-      .map((r) => ({ id: r.id, code: r.code, title: r.title, kind: r.kind, level: r.level, enabled: r.enabled, hits_30d: hits30d(state, r.id) }));
+      .map((r) => ({ id: r.id, code: r.code, title: r.title, kind: r.kind, level: r.level, enabled: r.enabled, hits_30d: hits30d(state, r.id), review: ruleReview(state, r.id) }));
   });
   route('GET', '/rules/:id', (ctx) => {
     requireMethodologist(ctx);
@@ -822,7 +824,7 @@ export function createMockTransport(): MockTransport {
       docs.set(doc.template, { doc, keys });
     }
     const fields = passportFields(docs);
-    batch.meta = fields.length ? { passport: { fields } } : batch.meta;
+    batch.meta = fields.length ? { passport: { fields }, finance: MOCK_FINANCE } : batch.meta;
   }
 
   function tick() {

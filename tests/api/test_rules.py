@@ -68,7 +68,7 @@ def test_system_variables(world, client):
 def test_list_rules_with_filters(world, client):
     rows = client.get("/api/rules").json()
     assert [r["code"] for r in rows] == [f"R-0{i}" for i in range(1, 9)]
-    assert set(rows[0]) == {"id", "code", "title", "kind", "level", "enabled", "hits_30d"}
+    assert set(rows[0]) == {"id", "code", "title", "kind", "level", "enabled", "hits_30d", "review"}
     assert [r["code"] for r in client.get("/api/rules", params={"search": "r-03"}).json()] == ["R-03"]
     llm = client.get("/api/rules", params={"kind": "llm"}).json()
     assert all(r["kind"] == "llm" for r in llm)

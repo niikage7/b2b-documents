@@ -52,7 +52,8 @@ def schema_names(fake: FakeLLM) -> list[str]:
 
 def test_batch_gets_findings_colors_subject_and_passport(s, env, author, fake_llm, contract, notice):
     fake_llm.plan = risk_plan("contract") | risk_plan("notice")
-    fake_llm.passport = {"nmck": ("4 850 000,00 руб.", "4 850 000,00")}
+    fake_llm.passport = {"nmck": ("4 850 000,00 руб.", "4 850 000,00"),
+                         "contract_security": ("30 % НМЦК", "30 (тридцать) процентов")}
     batch_id = make_batch(s, env, author, [("Контракт.docx", contract), ("Извещение.docx", notice)])
     run_batch(batch_id)
 
@@ -86,7 +87,8 @@ def test_batch_gets_findings_colors_subject_and_passport(s, env, author, fake_ll
     assert view["subject"] == samples.SUBJECT
     assert "batch_meta" not in schema_names(fake_llm)
     assert schema_names(fake_llm).count("procurement_passport") == 1
-    assert [f["key"] for f in view["meta"]["passport"]["fields"]] == ["nmck"]
+    assert [f["key"] for f in view["meta"]["passport"]["fields"]] == ["nmck", "contract_security"]
+    assert view["meta"]["finance"]["total_security"] == 1455000
 
     # Группы правил: 7 правил поиска по 4 и одно правило «Проверка ИИ» — у каждого документа свои вызовы
     run = stages(s, batch_id)

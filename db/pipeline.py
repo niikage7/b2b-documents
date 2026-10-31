@@ -263,7 +263,7 @@ def set_batch_meta(s: Session, batch_id, *, subject: str | None, meta: dict | No
     return {"subject": subject, "meta": batch.meta}
 
 
-def set_batch_passport(s: Session, batch_id, passport: dict) -> dict:
+def set_batch_passport(s: Session, batch_id, passport: dict, *, finance: dict | None = None) -> dict:
     """Паспорт закупки (`ml.extract_passport`) в `batch.meta`; предмет — из паспорта, если его ещё нет.
 
     Возвращает данные события `batch.meta`. Паспорт можно считать параллельно с анализом:
@@ -276,6 +276,7 @@ def set_batch_passport(s: Session, batch_id, passport: dict) -> dict:
     fields = list(passport.get("fields", []))
     # Форма `{"fields": [...]}` — как в `BatchMeta` фронтенда: карточка паспорта читает `meta.passport.fields`
     meta["passport"] = {"fields": fields}
+    meta["finance"] = finance
     batch.meta = meta
     if not batch.subject:
         batch.subject = next((f["value"] for f in fields if f.get("key") == "subject"), None)

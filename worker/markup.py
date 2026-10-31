@@ -402,6 +402,9 @@ def summary_xlsx(summary: dict, out: str | Path, *, notes: Iterable[str] = ()) -
         items.append(("", ""))
         items.append(("Паспорт закупки", ""))
         items += [(p.get("label") or p.get("key"), p.get("value")) for p in passport]
+    total_security = ((totals.get("meta") or {}).get("finance") or {}).get("total_security")
+    if total_security is not None:
+        items.append(("Обеспечения всего, руб.", f"{total_security:,.2f}".replace(",", " ").replace(".", ",")))
     notes = list(notes)
     if notes:
         items.append(("", ""))

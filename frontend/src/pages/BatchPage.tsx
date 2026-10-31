@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { api } from '../api/endpoints';
 import { keys, useBatch, useBatchEvents } from '../api/queries';
-import type { BatchView, DocumentCard, FindingStatus, Level, PassportField } from '../api/types';
+import type { BatchView, DocumentCard, FinancialLoad, FindingStatus, Level, PassportField } from '../api/types';
 import { DeleteBatchDialog, RenameBatchDialog } from '../components/BatchDialogs';
 import { ConfirmDialog, Dialog, EmptyState, ErrorState, errorMessage, ListSkeleton, Menu, useToast } from '../components/feedback';
 import { Breadcrumbs, Button, Field, FileTypeIcon, FindingsBadges, LevelBadge, LevelDot, ProgressBar, Skeleton, Spinner, WorstLevelBadge } from '../components/ui';
@@ -312,6 +312,59 @@ function PassportCard({ fields }: { fields: PassportField[] }) {
   );
 }
 
+const RUB = new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 2 });
+
+/** Сколько дней до даты: 0 — сегодня, отрицательное — срок прошёл. */
+export function daysUntil(iso: string, now: Date = new Date()) {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return Math.round((new Date(y, m - 1, d).getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 86_400_000);
+}
+
+export function deadlineText(iso: string, now: Date = new Date()) {
+  const days = daysUntil(iso, now);
+  if (days < 0) return 'Срок подачи заявок прошёл';
+  if (days === 0) return 'Подача заявок заканчивается сегодня';
+  return `До окончания подачи заявок: ${days} дн.`;
+}
+
+function FinanceCard({ finance }: { finance: FinancialLoad }) {
+  const needed = finance.securities.filter((s) => s.required);
+  const cycle = finance.cash_cycle;
+  return (
+    <section className="card side-card">
+      <h3>Финансовая нагрузка</h3>
+      <p className="muted side-card__hint">Расчёт по паспорту закупки. Суммы от процента посчитаны от НМЦК: после торгов цена контракта может быть ниже</p>
+      {finance.deadline_at && <p className="finance__deadline">{deadlineText(finance.deadline_at)}</p>}
+      <dl className="passport">
+        {finance.securities.map((s) => (
+          <div key={s.key} className="passport__row" title={s.value}>
+            <dt>{s.label}</dt>
+            <dd>{!s.required ? 'не требуется' : s.amount != null ? RUB.format(s.amount) : s.value}</dd>
+          </div>
+        ))}
+        {finance.total_security != null && needed.length > 1 && (
+          <div className="passport__row finance__total">
+            <dt>{finance.total_incomplete ? 'Всего, без непрочитанных сумм' : 'Всего, если вносить деньгами'}</dt>
+            <dd>{RUB.format(finance.total_security)}</dd>
+          </div>
+        )}
+        {finance.advance_amount != null && (
+          <div className="passport__row">
+            <dt>Аванс от заказчика</dt>
+            <dd>{RUB.format(finance.advance_amount)}</dd>
+          </div>
+        )}
+        {cycle && (
+          <div className="passport__row" title={`Поставка ${cycle.delivery_days} дн.${cycle.acceptance_days != null ? `, приёмка ${cycle.acceptance_days} дн.` : ''}, оплата ${cycle.payment_days} дн.`}>
+            <dt>От начала поставки до оплаты, не дольше</dt>
+            <dd>{`≈ ${cycle.total_days} дн.`}</dd>
+          </div>
+        )}
+      </dl>
+    </section>
+  );
+}
+
 export function BatchPage() {
   const { batchId = '' } = useParams();
   const [sp, setSp] = useSearchParams();
@@ -538,6 +591,7 @@ export function BatchPage() {
             )}
           </section>
           {!running && <BriefCard batch={batch} />}
+          {batch.meta?.finance && <FinanceCard finance={batch.meta.finance} />}
           {passport.length > 0 && <PassportCard fields={passport} />}
           {batch.counters && batch.counters.errors > 0 && (
             <div className="note">

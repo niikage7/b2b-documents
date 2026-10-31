@@ -165,6 +165,13 @@ export interface RuleTriggered {
   count: number;
 }
 
+export interface RuleReview {
+  confirmed: number;
+  rejected: number;
+  precision?: number | null;
+  noisy: boolean;
+}
+
 export interface PassportField {
   key: string;
   label: string;
@@ -179,8 +186,29 @@ export interface PassportField {
   section_number?: string | null;
 }
 
+export interface SecurityItem {
+  key: string;
+  label: string;
+  value: string;
+  required: boolean;
+  amount?: number | null;
+  percent?: number | null;
+  basis?: 'stated' | 'percent_of_nmck' | null;
+}
+
+export interface FinancialLoad {
+  nmck?: number | null;
+  securities: SecurityItem[];
+  total_security?: number | null;
+  total_incomplete: boolean;
+  advance_amount?: number | null;
+  cash_cycle?: { delivery_days: number; acceptance_days?: number | null; payment_days: number; total_days: number } | null;
+  deadline_at?: string | null;
+}
+
 export interface BatchMeta {
   passport?: { fields: PassportField[] };
+  finance?: FinancialLoad | null;
   brief?: PackageBrief;
   [key: string]: unknown;
 }
@@ -466,6 +494,7 @@ export interface RuleListItem {
   level: Level;
   enabled: boolean;
   hits_30d: number;
+  review?: RuleReview;
 }
 
 export interface Rule extends RuleListItem {
