@@ -324,3 +324,8 @@ def test_rule_review_stats(s, world):
     assert rules._review_view({"confirmed": 1, "rejected": 4}) == {
         "confirmed": 1, "rejected": 4, "precision": 0.2, "noisy": True}
     assert not rules._review_view({"confirmed": 3, "rejected": 2})["noisy"]
+
+    assert row()["hits_30d"] > 0
+    batches.delete_batch(s, own[0].batch_id)
+    assert row()["hits_30d"] == 0
+    assert row()["review"] == {"confirmed": 0, "rejected": 0, "precision": None, "noisy": False}

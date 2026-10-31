@@ -198,6 +198,16 @@ def test_summary_xlsx_sheets(tmp_path):
     assert rows[0][:3] == ("№", "Документ", "Раздел")
     assert rows[1][2] == "п. 3.1 Цена" and rows[1][4] == "Критично"
     assert wb["Находки"]["E2"].fill.fgColor.rgb.endswith("FFC7CE")
+    assert "Обеспечения всего, руб." not in totals
+
+
+def test_summary_xlsx_total_security(tmp_path):
+    out = tmp_path / "Сводка.xlsx"
+    summary = {"totals": {"name": "Закупка", "meta": {"finance": {"total_security": 1988500.5}}},
+               "documents": [], "findings": []}
+    markup.summary_xlsx(summary, out)
+    totals = {r[0]: r[1] for r in load_workbook(out)["Итоги"].iter_rows(values_only=True)}
+    assert totals["Обеспечения всего, руб."] == "1 988 500,50"
 
 
 def test_archive_path():

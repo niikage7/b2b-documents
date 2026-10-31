@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from contracts.analysis import SYSTEM_VARIABLES, RuleSpec, RuleVariable
 from db.errors import Conflict, NotFound, ValidationFailed, VersionConflict
 from db.findings import iso
-from db.models import Finding, Rule, RuleProfile, RuleVersion, User
+from db.models import Batch, Finding, Rule, RuleProfile, RuleVersion, User
 
 MAX_LLM_RULES = 5
 """Правил типа `llm` (весь документ окнами) в профиле — не больше: каждое читает документ целиком."""
@@ -181,17 +181,22 @@ def _save_new_rule(s: Session, profile_id: uuid.UUID, data: dict, *, actor_id=No
 def _hits_30d(s: Session, rule_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
     since = datetime.now(UTC) - timedelta(days=30)
     return dict(s.execute(
-        select(Finding.rule_id, func.count()).where(Finding.rule_id.in_(rule_ids), Finding.source == "ai",
-                                                     Finding.created_at >= since).group_by(Finding.rule_id)
+        select(Finding.rule_id, func.count()).join(Batch, Batch.id == Finding.batch_id).where(
+            Finding.rule_id.in_(rule_ids), Finding.source == "ai", Finding.created_at >= since,
+            Batch.deleted_at.is_(None)).group_by(Finding.rule_id)
     ).all()) if rule_ids else {}
 
 
 def _review_stats(s: Session, rule_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, dict]:
-    """Решения ревью по находкам ИИ за 90 дней: `edited` — находка верна, но уточнена юристом."""
+    """Решения ревью по находкам ИИ за 90 дней: `edited` — находка верна, но уточнена юристом.
+
+    Удалённые пакеты не считаются: пробная загрузка не должна менять оценку правила.
+    """
     since = datetime.now(UTC) - timedelta(days=REVIEW_WINDOW_DAYS)
     rows = s.execute(
-        select(Finding.rule_id, Finding.status, func.count()).where(
+        select(Finding.rule_id, Finding.status, func.count()).join(Batch, Batch.id == Finding.batch_id).where(
             Finding.rule_id.in_(rule_ids), Finding.source == "ai", Finding.created_at >= since,
+            Batch.deleted_at.is_(None),
             Finding.status.in_(("accepted", "edited", "rejected"))).group_by(Finding.rule_id, Finding.status)
     ).all() if rule_ids else []
     stats: dict[uuid.UUID, dict] = {}
