@@ -296,6 +296,8 @@ export interface Finding {
   related?: FindingRef[];
   /** Текст распознан со скана: значения стоит сверить с оригиналом */
   from_scan?: boolean;
+  /** Страницу исходника можно показать: документ в PDF или скан */
+  source_available?: boolean;
   block_id: string;
   start: number;
   end: number;
@@ -379,6 +381,14 @@ export interface NewUserFinding {
 }
 
 export type HistoryAction = 'created' | 'accepted' | 'rejected' | 'edited' | 'commented' | 'reopened' | 'deleted';
+
+/** Страница исходника с цитатой; рамки — доли размера страницы */
+export interface FindingOriginal {
+  page: number;
+  image_url: string;
+  aspect: number;
+  rects: { x0: number; y0: number; x1: number; y1: number }[];
+}
 
 export interface HistoryEvent {
   action: HistoryAction;

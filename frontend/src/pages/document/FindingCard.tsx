@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { Check, ChevronDown, History, Pencil, Trash2, Undo2, X } from 'lucide-react';
-import { forwardRef, useState } from 'react';
+import { Check, ChevronDown, FileSearch, History, Pencil, Trash2, Undo2, X } from 'lucide-react';
+import { forwardRef, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../../api/endpoints';
 import { keys } from '../../api/queries';
 import type { Finding, FindingPatch, Level } from '../../api/types';
+import { Dialog, errorMessage } from '../../components/feedback';
 import { Button, Confidence, LevelBadge, Segmented, Spinner } from '../../components/ui';
 import { formatWhen } from '../../lib/format';
 import { FINDING_STATUS_LABELS, HISTORY_ACTION_LABELS, LEVEL_LABELS } from '../../lib/labels';
@@ -40,6 +41,47 @@ function StatusMark({ f }: { f: Finding }) {
   if (f.status === 'edited') return <span className="fc__status fc__status--edited">Изменено</span>;
   if (f.source === 'user') return <span className="fc__status">Ручная</span>;
   return null;
+}
+
+function OriginalDialog({ finding, onClose }: { finding: Finding; onClose: () => void }) {
+  const q = useQuery({ queryKey: keys.original(finding.id), queryFn: () => api.findingOriginal(finding.id) });
+  const first = useRef<HTMLSpanElement>(null);
+  return (
+    <Dialog
+      title={q.data ? `Оригинал · стр. ${q.data.page}` : 'Оригинал'}
+      width={860}
+      onClose={onClose}
+      actions={<Button onClick={onClose}>Закрыть</Button>}
+    >
+      {q.isPending && <div className="muted row"><Spinner /> Загружаем страницу…</div>}
+      {q.isError && <div className="text-critical">Не удалось загрузить страницу: {errorMessage(q.error)}</div>}
+      {q.data && (
+        <>
+          {q.data.rects.length === 0 && (
+            <p className="fc__note">Точное место цитаты неизвестно: найдите её на странице по тексту.</p>
+          )}
+          <div className="original">
+            <div className="original__page" style={{ aspectRatio: q.data.aspect }}>
+              <img src={q.data.image_url} alt={`Страница ${q.data.page} исходного документа`} onLoad={() => first.current?.scrollIntoView({ block: 'center' })} />
+              {q.data.rects.map((r, i) => (
+                <span
+                  key={i}
+                  ref={i === 0 ? first : undefined}
+                  className={`original__mark original__mark--${finding.level}`}
+                  style={{
+                    left: `${r.x0 * 100}%`,
+                    top: `${r.y0 * 100}%`,
+                    width: `${(r.x1 - r.x0) * 100}%`,
+                    height: `${(r.y1 - r.y0) * 100}%`,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </Dialog>
+  );
 }
 
 function HistoryList({ findingId }: { findingId: string }) {
@@ -87,6 +129,7 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
   const [editing, setEditing] = useState(false);
   const [commenting, setCommenting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [level, setLevel] = useState<Level>(f.level);
   const [comment, setComment] = useState(f.comment ?? '');
   const [busy, setBusy] = useState<string | null>(null);
@@ -186,6 +229,12 @@ export const FindingCard = forwardRef<HTMLDivElement, FindingCardProps>(function
           ))}
         </div>
       )}
+      {f.source_available && (
+        <button type="button" className="btn btn--link fc__original" onClick={() => setShowOriginal(true)}>
+          <FileSearch size={14} /> Сверить с оригиналом
+        </button>
+      )}
+      {showOriginal && <OriginalDialog finding={f} onClose={() => setShowOriginal(false)} />}
       {f.from_scan && <p className="fc__note">Текст распознан со скана: сверьте значения с оригиналом.</p>}
       {f.status === 'edited' && f.original_level !== f.level && (
         <p className="fc__note">Уровень изменён: было «{LEVEL_LABELS[f.original_level]}»</p>

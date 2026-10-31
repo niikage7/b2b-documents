@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import uuid
+from dataclasses import asdict
+from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, BackgroundTasks, Query, Response
+from fastapi import Path as Path_
 from pydantic import BaseModel, Field
 
 from api import hooks
-from api.deps import CurrentUser, DbSession
+from api.deps import CurrentUser, DbSession, StorageDep
 from db import batches, documents, findings, pipeline
 from db.errors import Conflict, NotFound
 from db.models import Batch, Document
+from ml.page_view import PageMeta, page_fractions, quote_words, render_page
 
 router = APIRouter(tags=["documents"])
 
@@ -123,6 +129,57 @@ def delete_finding(finding_id: uuid.UUID, user: CurrentUser, s: DbSession, backg
     result = findings.delete_user_finding(s, finding_id, actor_id=user.id)
     background.add_task(hooks.publish_recalc, hooks.recalc_event(s, result))
     return result
+
+
+def _page_image(storage, *, batch_id: str, document_id: str, object_key: str,
+                page: int) -> tuple[bytes, PageMeta]:
+    """Страница и её размеры: рендер один раз, дальше из хранилища. Нет такой страницы — 404."""
+    from worker.runtime import work_key
+
+    image_key = work_key(batch_id, document_id, f"pages/{page}.jpg")
+    meta_key = work_key(batch_id, document_id, f"pages/{page}.json")
+    try:
+        return storage.get_bytes(image_key), PageMeta(**json.loads(storage.get_bytes(meta_key)))
+    except Exception:  # noqa: BLE001 — страницы ещё нет в хранилище: у MinIO и памяти разные исключения
+        pass
+    with tempfile.TemporaryDirectory(prefix="b2b-page-") as tmp:
+        src = Path(tmp) / "source.pdf"
+        storage.download(object_key, src)
+        rendered = render_page(src, page)
+    if rendered is None:
+        raise NotFound("В документе нет такой страницы")
+    image, meta = rendered
+    storage.put_bytes(image_key, image, content_type="image/jpeg")
+    storage.put_bytes(meta_key, json.dumps(asdict(meta)).encode(), content_type="application/json")
+    return image, meta
+
+
+@router.get("/findings/{finding_id}/source")
+def finding_source(finding_id: uuid.UUID, user: CurrentUser, s: DbSession, storage: StorageDep) -> dict:
+    """Страница исходного PDF и рамки цитаты в долях её размера (FR-5.6*): сверка с оригиналом."""
+    place = findings.finding_place(s, finding_id)
+    if place["kind"] not in findings.PAGE_VIEW_KINDS:
+        raise Conflict("Оригинал страницы можно показать только для PDF и сканов")
+    words = quote_words(place["source_map"], place["start"], place["end"])
+    page = min(words) if words else place["page"]
+    _, meta = _page_image(storage, batch_id=place["batch_id"], document_id=place["document_id"],
+                          object_key=place["object_key"], page=page)
+    return {"page": page, "image_url": f"/api/documents/{place['document_id']}/pages/{page}/image",
+            "aspect": round(meta.width / meta.height, 5), "rects": page_fractions(words.get(page, []), meta)}
+
+
+@router.get("/documents/{document_id}/pages/{page}/image")
+def page_image(document_id: uuid.UUID, page: Annotated[int, Path_(ge=1)], user: CurrentUser, s: DbSession,
+               storage: StorageDep) -> Response:
+    """JPEG страницы исходного PDF."""
+    doc = s.get(Document, document_id)
+    if doc is None:
+        raise NotFound("Документ не найден")
+    if doc.kind not in findings.PAGE_VIEW_KINDS:
+        raise Conflict("Оригинал страницы можно показать только для PDF и сканов")
+    image, _ = _page_image(storage, batch_id=str(doc.batch_id), document_id=str(doc.id),
+                           object_key=doc.object_key, page=page)
+    return Response(image, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/findings/{finding_id}/history")

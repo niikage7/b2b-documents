@@ -14,6 +14,7 @@ import type {
   ExportStatus,
   FindingMutation,
   FindingPatch,
+  FindingOriginal,
   HistoryEvent,
   Me,
   NewUserFinding,
@@ -86,6 +87,7 @@ export const api = {
   deleteFinding: (findingId: string) => request<Recalc | undefined>('DELETE', `/findings/${findingId}`),
   findingHistory: (findingId: string) =>
     request<{ events: HistoryEvent[] }>('GET', `/findings/${findingId}/history`),
+  findingOriginal: (findingId: string) => request<FindingOriginal>('GET', `/findings/${findingId}/source`),
 
   // Экспорт
   exportDocument: (documentId: string) =>

@@ -282,25 +282,11 @@ def mark_docx(src: str | Path, findings: list[dict], out: str | Path) -> MarkRes
 # --- PDF ------------------------------------------------------------------------------------
 
 
-def _line_rects(words: list[dict]) -> list[tuple[float, float, float, float]]:
-    """Слова подряд на одной строке → один прямоугольник: выделение выглядит как маркер, а не рябь."""
-    rects: list[list[float]] = []
-    for w in words:
-        b = w["bbox"]
-        x0, y0, x1, y1 = b["x0"], b["y0"], b["x1"], b["y1"]
-        if rects:
-            r = rects[-1]
-            overlap = min(r[3], y1) - max(r[1], y0)
-            if overlap > 0.5 * min(r[3] - r[1], y1 - y0) and x0 >= r[0] - 1:
-                r[0], r[1], r[2], r[3] = min(r[0], x0), min(r[1], y0), max(r[2], x1), max(r[3], y1)
-                continue
-        rects.append([x0, y0, x1, y1])
-    return [tuple(r) for r in rects]
-
-
 def mark_pdf(src: str | Path, findings: list[dict], out: str | Path) -> MarkResult:
     """PDF с выделениями цвета уровня и всплывающими заметками; для сканов — по рамкам слов OCR (FR-7.2)."""
     import pymupdf
+
+    from ml.page_view import line_rects
 
     result = MarkResult()
     with pymupdf.open(str(src)) as doc:
@@ -322,7 +308,7 @@ def mark_pdf(src: str | Path, findings: list[dict], out: str | Path) -> MarkResu
             for page_no, page_words in by_page.items():
                 page = doc[page_no - 1]
                 rects = []
-                for rect in _line_rects(page_words):
+                for rect in line_rects(page_words):
                     rect = pymupdf.Rect(rect)
                     # Рамки OCR — в системе повёрнутой страницы (`page.rect`), аннотации — без поворота
                     if page.rotation and page_words[0].get("confidence") is not None:

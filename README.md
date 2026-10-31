@@ -191,6 +191,9 @@ curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/clarificati
 # Черновик правила из описания риска, только методолог; ничего не сохраняет
 curl -b cookies.txt -X POST http://localhost:8000/api/rules/draft \
   -H 'Content-Type: application/json' -d '{"description": "Заказчик требует страховать товар за счёт поставщика"}'
+
+# Страница исходного PDF с рамками цитаты: сверка находки с оригиналом
+curl -b cookies.txt http://localhost:8000/api/findings/$FINDING/source
 ```
 
 ## Документация

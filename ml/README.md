@@ -26,6 +26,7 @@
 | `POST /api/batches/{id}/ask` | analysis | `ml.ask_package(question, documents, search=...)` | `PackageAnswer`: ответ только из документов, цитаты привязаны к блокам; без цитаты в тексте — `found=false` |
 | `POST /api/batches/{id}/brief` | analysis | `ml.package_brief(findings, subject=, passport=, documents=)` | `PackageBrief`: итог считает код по находкам, текст и выбор главных рисков — модель |
 | `POST /api/rules/draft` | analysis | `ml.draft_rule(description)` | `RuleDraftResult`: черновик правила и примеры условий, прошёл `validate_rule`, ничего не сохраняет |
+| `GET /api/findings/{id}/source`, `GET /api/documents/{id}/pages/{n}/image` | API | `ml.page_view.render_page(path, page)`, `quote_words`, `page_fractions` | Страница исходного PDF в JPEG и рамки цитаты в долях размера страницы (FR-5.6\*): рендер при первом показе, дальше из MinIO |
 | `POST /api/rules/test` | API | `ml.test_rule(rule, text=...)` или `ml.test_rule(rule, blocks=..., document_id=..., search=...)` | `RuleTestResult`, не дольше 60 с |
 | Сид БД | — | `ml.load_default_checklist()` | Профиль «44-ФЗ, поставка товаров» и правила R-01…R-08 |
 

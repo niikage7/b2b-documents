@@ -13,6 +13,7 @@ export const keys = {
   batchFindings: (id: string) => ['batch', id, 'findings'] as const,
   document: (id: string) => ['document', id] as const,
   history: (findingId: string) => ['history', findingId] as const,
+  original: (findingId: string) => ['original', findingId] as const,
   rules: (profileId: string) => ['rules', profileId] as const,
   rule: (id: string) => ['rule', id] as const,
   systemVariables: ['system-variables'] as const,

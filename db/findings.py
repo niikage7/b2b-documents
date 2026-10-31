@@ -18,6 +18,8 @@ from db import derived
 from db.errors import Forbidden, InvalidTransition, NotFound, ValidationFailed, VersionConflict
 from db.models import Batch, BlockRow, Document, Finding, FindingEvent, Rule, User
 
+PAGE_VIEW_KINDS = ("pdf", "scan")
+
 
 def _id(value) -> uuid.UUID:
     return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
@@ -150,6 +152,8 @@ def findings_payload(s: Session, findings: Sequence[Finding], *, viewer_id=None)
             "related": f.related or [],
             # Текст распознан: «30 дней» могло стать «80 дней», юристу стоит сверить значение с оригиналом
             "from_scan": bool(block and (block.low_ocr_quality or doc_kinds.get(f.document_id) == "scan")),
+            # Страницу можно показать только у PDF: DOCX не имеет своей разметки страниц
+            "source_available": doc_kinds.get(f.document_id) in PAGE_VIEW_KINDS,
             "block_id": str(f.block_id),
             "start": f.start,
             "end": f.end,
@@ -180,6 +184,15 @@ def _finding(s: Session, finding_id, *, lock: bool = False) -> Finding:
     if finding is None:
         raise NotFound("Находка не найдена")
     return finding
+
+
+def finding_place(s: Session, finding_id) -> dict:
+    """Где находка лежит в исходнике: документ, страница блока и карта позиций — для сверки с оригиналом."""
+    f = _finding(s, finding_id)
+    block = s.get(BlockRow, f.block_id)
+    doc = s.get(Document, f.document_id)
+    return {"batch_id": str(doc.batch_id), "document_id": str(doc.id), "kind": doc.kind, "page": block.page,
+            "object_key": doc.object_key, "source_map": block.source_map, "start": f.start, "end": f.end}
 
 
 def _snapshot(f: Finding) -> dict:
