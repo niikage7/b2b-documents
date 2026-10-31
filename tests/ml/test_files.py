@@ -64,6 +64,13 @@ def test_corrupted_and_unsupported(tmp_path):
     assert check_file(tmp_path / "image.png").check == "unsupported"
     (tmp_path / "empty.pdf").write_bytes(b"")
     assert check_file(tmp_path / "empty.pdf").check == "corrupted"
+    # Файл оборвался при загрузке: PyMuPDF открывает его, а число страниц читать отказывается
+    doc = pymupdf.open()
+    for _ in range(40):
+        doc.new_page().insert_text((50, 50), "text" * 200)
+    full = doc.tobytes()
+    (tmp_path / "cut.pdf").write_bytes(full[:2000])
+    assert check_file(tmp_path / "cut.pdf").check == "corrupted"
 
 
 def test_rtf_signature(tmp_path):

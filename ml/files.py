@@ -99,9 +99,13 @@ def _check_pdf(path: Path) -> FileCheck:
     try:
         if doc.needs_pass:
             raise EncryptedFileError()
-        if doc.page_count == 0:
+        try:
+            pages = doc.page_count
+        except Exception as exc:  # у обрезанного файла open проходит, а дерево страниц не читается
+            raise CorruptedFileError(detail=f"pdf: {exc}") from exc
+        if pages == 0:
             raise CorruptedFileError("В файле PDF нет страниц")
-        return FileCheck(check="ok", kind="pdf", pages=doc.page_count)
+        return FileCheck(check="ok", kind="pdf", pages=pages)
     finally:
         doc.close()
 
