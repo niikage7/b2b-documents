@@ -25,6 +25,10 @@ MAX_LLM_RULES = 5
 _FIELDS = ("code", "title", "description", "level", "kind", "prompt_template", "variables", "enabled")
 
 
+REVIEW_WINDOW_DAYS = 90
+NOISY_MIN_DECISIONS = 5  # меньше решений — случайность, а не шум правила
+
+
 def _id(value) -> uuid.UUID:
     return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
 
@@ -182,13 +186,37 @@ def _hits_30d(s: Session, rule_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]
     ).all()) if rule_ids else {}
 
 
+def _review_stats(s: Session, rule_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    """Решения ревью по находкам ИИ за 90 дней: `edited` — находка верна, но уточнена юристом."""
+    since = datetime.now(UTC) - timedelta(days=REVIEW_WINDOW_DAYS)
+    rows = s.execute(
+        select(Finding.rule_id, Finding.status, func.count()).where(
+            Finding.rule_id.in_(rule_ids), Finding.source == "ai", Finding.created_at >= since,
+            Finding.status.in_(("accepted", "edited", "rejected"))).group_by(Finding.rule_id, Finding.status)
+    ).all() if rule_ids else []
+    stats: dict[uuid.UUID, dict] = {}
+    for rule_id, status, count in rows:
+        item = stats.setdefault(rule_id, {"confirmed": 0, "rejected": 0})
+        item["rejected" if status == "rejected" else "confirmed"] += count
+    return stats
+
+
+def _review_view(item: dict | None) -> dict:
+    confirmed, rejected = (item or {}).get("confirmed", 0), (item or {}).get("rejected", 0)
+    decided = confirmed + rejected
+    return {"confirmed": confirmed, "rejected": rejected,
+            "precision": round(confirmed / decided, 2) if decided else None,
+            "noisy": decided >= NOISY_MIN_DECISIONS and rejected > confirmed}
+
+
 def rule_view(s: Session, rule: Rule) -> dict:
     user = s.get(User, rule.updated_by) if rule.updated_by else None
     return {
         "id": str(rule.id), "profile_id": str(rule.profile_id), "code": rule.code, "title": rule.title,
         "description": rule.description, "level": rule.level, "kind": rule.kind,
         "prompt_template": rule.prompt_template, "variables": rule.variables or [], "enabled": rule.enabled,
-        "hits_30d": _hits_30d(s, [rule.id]).get(rule.id, 0), "updated_at": iso(rule.updated_at),
+        "hits_30d": _hits_30d(s, [rule.id]).get(rule.id, 0),
+        "review": _review_view(_review_stats(s, [rule.id]).get(rule.id)), "updated_at": iso(rule.updated_at),
         "updated_by": {"full_name": user.full_name} if user else None, "version": rule.version,
     }
 
@@ -204,8 +232,10 @@ def list_rules(s: Session, *, profile_id=None, search: str | None = None, kind: 
         q = q.where(Rule.kind == kind)
     rules = s.scalars(q.order_by(Rule.code)).all()
     hits = _hits_30d(s, [r.id for r in rules])
+    reviews = _review_stats(s, [r.id for r in rules])
     return [{"id": str(r.id), "code": r.code, "title": r.title, "kind": r.kind, "level": r.level,
-             "enabled": r.enabled, "hits_30d": hits.get(r.id, 0)} for r in rules]
+             "enabled": r.enabled, "hits_30d": hits.get(r.id, 0), "review": _review_view(reviews.get(r.id))}
+            for r in rules]
 
 
 def _rule(s: Session, rule_id) -> Rule:

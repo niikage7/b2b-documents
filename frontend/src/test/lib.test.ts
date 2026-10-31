@@ -1,3 +1,4 @@
+import { daysUntil, deadlineText } from '../pages/BatchPage';
 import { layoutCallouts } from '../lib/calloutLayout';
 import { countLabel, formatEta, formatWhen } from '../lib/format';
 import { validateRule } from '../lib/ruleValidation';
@@ -262,5 +263,18 @@ describe('ссылки на место в пакете', () => {
   it('показывает файл, пункт и страницу, пропуская пустое', () => {
     expect(refPlace(ref)).toBe('ТЗ.docx, п. 4.1, стр. 2');
     expect(refPlace({ filename: 'ТЗ.docx', section_number: null, page: null })).toBe('ТЗ.docx');
+  });
+});
+
+describe('срок подачи заявок', () => {
+  const now = new Date(2026, 9, 31, 7, 30);
+  it('считает календарные дни без учёта времени', () => {
+    expect(daysUntil('2026-11-05T10:00', now)).toBe(5);
+    expect(daysUntil('2026-10-31', now)).toBe(0);
+  });
+  it('пишет понятный текст, в том числе после срока', () => {
+    expect(deadlineText('2026-11-05T10:00', now)).toBe('До окончания подачи заявок: 5 дн.');
+    expect(deadlineText('2026-10-31', now)).toBe('Подача заявок заканчивается сегодня');
+    expect(deadlineText('2026-10-30', now)).toBe('Срок подачи заявок прошёл');
   });
 });

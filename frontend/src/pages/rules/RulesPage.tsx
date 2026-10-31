@@ -381,6 +381,7 @@ function RulesWorkspace() {
                     <th>Правило</th>
                     <th>Уровень</th>
                     <th className="num" title="Сколько раз правило сработало за 30 дней">За 30 дней</th>
+                    <th className="num" title="Доля находок правила, которые юристы подтвердили, за 90 дней">Подтверждено</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -407,6 +408,10 @@ function RulesWorkspace() {
                         <LevelBadge level={r.level} small />
                       </td>
                       <td className="num">{r.hits_30d || '—'}</td>
+                      <td className="num" title={r.review?.precision != null ? `Подтверждено ${r.review.confirmed}, отклонено ${r.review.rejected}` : 'Юристы ещё не принимали решений по находкам этого правила'}>
+                        {r.review?.precision != null ? `${Math.round(r.review.precision * 100)} %` : '—'}
+                        {r.review?.noisy && <div className="cell-sub">Часто отклоняют</div>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

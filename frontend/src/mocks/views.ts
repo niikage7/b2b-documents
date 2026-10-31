@@ -324,6 +324,14 @@ export function hits30d(state: MockState, ruleId: string): number {
   return state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai' && f.created_at >= since).length;
 }
 
+export function ruleReview(state: MockState, ruleId: string) {
+  const own = state.findings.filter((f) => f.rule_id === ruleId && f.source === 'ai');
+  const confirmed = own.filter((f) => f.status === 'accepted' || f.status === 'edited').length;
+  const rejected = own.filter((f) => f.status === 'rejected').length;
+  const decided = confirmed + rejected;
+  return { confirmed, rejected, precision: decided ? Math.round((confirmed / decided) * 100) / 100 : null, noisy: decided >= 5 && rejected > confirmed };
+}
+
 export function ruleView(state: MockState, rule: MRule): Rule {
   const user = rule.updated_by ? state.users.find((u) => u.id === rule.updated_by) : undefined;
   return {
@@ -338,6 +346,7 @@ export function ruleView(state: MockState, rule: MRule): Rule {
     variables: rule.variables,
     enabled: rule.enabled,
     hits_30d: hits30d(state, rule.id),
+    review: ruleReview(state, rule.id),
     updated_at: rule.updated_at,
     updated_by: user ? { full_name: user.full_name } : null,
     version: rule.version,

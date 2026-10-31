@@ -484,11 +484,23 @@ export function seedState(): MockState {
         keysByTemplate.set(sd.template, { doc, keys });
       }
     }
-    if (sb.passport) batch.meta = { passport: { fields: passportFields(keysByTemplate) } };
+    if (sb.passport) batch.meta = { passport: { fields: passportFields(keysByTemplate) }, finance: MOCK_FINANCE };
     if (sb.status === 'done' || sb.status === 'partial_error') batch.finished_at = nowIso(-sb.ago + 3 * 60_000);
   }
   return state;
 }
+
+export const MOCK_FINANCE = {
+  nmck: 48_600_000,
+  securities: [
+    { key: 'application_security', label: 'Обеспечение заявки', value: '1 % НМЦК', required: true, amount: 486_000, percent: 1, basis: 'percent_of_nmck' as const },
+    { key: 'contract_security', label: 'Обеспечение исполнения', value: '30 % НМЦК', required: true, amount: 14_580_000, percent: 30, basis: 'percent_of_nmck' as const },
+  ],
+  total_security: 15_066_000,
+  total_incomplete: false,
+  cash_cycle: { delivery_days: 3, acceptance_days: 35, payment_days: 42, total_days: 80 },
+  deadline_at: '2026-11-20T10:00',
+};
 
 export function passportFields(docs: Map<TemplateName, { doc: MDocument; keys: Map<string, MBlock> }>) {
   const out = [];

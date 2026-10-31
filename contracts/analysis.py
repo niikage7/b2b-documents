@@ -186,6 +186,40 @@ class ProcurementPassport(BaseModel):
         return next((f.value for f in self.fields if f.key == key), None)
 
 
+class SecurityItem(BaseModel):
+    """Одно обеспечение: значение из паспорта и сумма в рублях, если её можно получить."""
+
+    key: str
+    label: str
+    value: str
+    required: bool = Field(description="False — в документах сказано, что обеспечение не требуется")
+    amount: float | None = None
+    percent: float | None = None
+    basis: Literal["stated", "percent_of_nmck"] | None = Field(
+        default=None, description="Сумма указана в документе или посчитана как процент от НМЦК")
+
+
+class CashCycle(BaseModel):
+    """Сколько поставщик финансирует исполнение сам: сроки в календарных днях, верхняя оценка."""
+
+    delivery_days: int
+    acceptance_days: int | None = None
+    payment_days: int
+    total_days: int
+
+
+class FinancialLoad(BaseModel):
+    """Финансовая нагрузка участника (`batch.meta.finance`), посчитана кодом из значений паспорта."""
+
+    nmck: float | None = None
+    securities: list[SecurityItem] = Field(default_factory=list)
+    total_security: float | None = None
+    total_incomplete: bool = Field(default=False, description="Сумма неполная: одно из обеспечений не прочитано")
+    advance_amount: float | None = None
+    cash_cycle: CashCycle | None = None
+    deadline_at: str | None = Field(default=None, description="ISO: 2026-11-05T10:00 или 2026-11-05")
+
+
 class FindingRef(BaseModel):
     """Другое место в пакете, с которым связана находка: второй документ противоречия (FR-4.4*)."""
 

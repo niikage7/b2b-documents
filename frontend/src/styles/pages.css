@@ -529,6 +529,16 @@
   text-align: right;
 }
 
+.finance__deadline {
+  margin: 10px 0 0;
+  font-weight: 600;
+}
+
+.finance__total dt {
+  color: inherit;
+  font-weight: 600;
+}
+
 .findings-filters .select {
   width: auto;
 }

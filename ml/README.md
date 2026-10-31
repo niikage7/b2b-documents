@@ -19,6 +19,7 @@
 | Сохранение правила | API | `ml.validate_rule(rule)`, `ml.embed_rule_query(rule)` | Ошибки для 422 и `rule_version.query_embedding` |
 | `extract_batch_meta` | analysis | `ml.extract_batch_meta([(filename, blocks), ...])` | Предмет закупки или `None` |
 | `extract_passport` | analysis, параллельно с анализом | `ml.extract_passport([(document_id, filename, blocks), ...], search=PgVectorSearch(conn))` | `ProcurementPassport`: НМЦК, обеспечения, сроки поставки, приёмки и оплаты, гарантия, место поставки, дата окончания подачи заявок — у каждого значения цитата и место в документе. Пишется `db.pipeline.set_batch_passport` в `batch.meta` |
+| После паспорта | analysis | `ml.financial_load(passport.fields)` | `FinancialLoad` без LLM: обеспечения в рублях (сумма из документа или процент от НМЦК), срок от начала поставки до оплаты, дата окончания подачи заявок. Значение с двумя разными числами остаётся без суммы. Пишется в `batch.meta.finance` |
 | Старт анализа | analysis | `ml.group_rules(rules)` | Группы по 3–4 правила для chord |
 | `analyze_rule_group` | analysis | `ml.analyze_rule_group(blocks, rules, subject=..., document_id=..., search=PgVectorSearch(conn))` | `RuleGroupResult`: кандидаты с `block_id`, `start`, `end`, отброшенные ответы, учёт токенов. Поиск читает все фрагменты документа и сам ранжирует их гибридом векторов и BM25 |
 | Запрос о даче разъяснений | export | `ml.draft_clarification(findings, subject=, customer=, procurement_number=, law=)`, затем `draft.as_text()` или `ml.render_clarification_docx(draft, path, sender=)` | Письмо заказчику по находкам пакета: все вопросы в одном запросе, цитата и пункт — из находки, формулировку вопроса пишет LLM. Вход — `db.exports.clarification_input(s, batch_id, finding_ids=)` |
@@ -47,7 +48,7 @@
 | `extract/page_classes.py` | Классы страниц `text`, `scan`, `mixed`, `curves`, `empty` (FR-3.4) |
 | `ocr/` | Края, ориентация, наклон, линии таблиц; Tesseract `--psm 3`; перечитывание оторванных номеров пунктов и дочитывание пропущенных значений в узких колонках; чистка; исправление типичных ошибок — римские номера разделов, «6)» вместо «б)», смесь кириллицы и латиницы, «44-ФЗ» (`correct.py`); уверенность страницы (FR-3.5); кеш с версией конвейера |
 | `structure.py` | Блоки с разделами из сырых абзацев (FR-3.1, FR-4.2) и фрагменты для поиска |
-| `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки, паспорт закупки, проверки без LLM (`checks.py`), противоречия между документами (`crosscheck.py`), вопросы к пакету (`ask.py`), вывод по пакету (`brief.py`), черновик правила (`rule_draft.py`) |
+| `analysis/` | Шаблоны и переменные правил, эмбеддинги, гибридный поиск (векторы и BM25), адаптер LLM, промпты, привязка цитат, движок, `test_rule`, предмет закупки, паспорт закупки, проверки без LLM (`checks.py`), финансовая нагрузка (`finance.py`), противоречия между документами (`crosscheck.py`), вопросы к пакету (`ask.py`), вывод по пакету (`brief.py`), черновик правила (`rule_draft.py`) |
 | `checklist/` | Стартовые чек-листы R-01…R-08: 44-ФЗ и 223-ФЗ |
 
 Любая правка подготовки или чистки OCR увеличивает `PIPELINE_VERSION` в [`config.py`](config.py), иначе кеш отдаст старое распознавание.
