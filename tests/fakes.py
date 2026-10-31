@@ -1,0 +1,134 @@
+"""Подделки для тестов анализа: эмбеддер без модели и LLM без сети."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+import time
+from collections.abc import Callable
+
+import httpx
+
+from ml.analysis.llm import LLMClient
+from ml.config import Settings
+
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
+class FakeEmbedder:
+    """Мешок «основ» слов (первые 5 букв), захешированный в 64 измерения."""
+
+    dim = 64
+
+    def embed(self, texts, kind="passage"):
+        out = []
+        for text in texts:
+            vec = [0.0] * self.dim
+            for word in _WORD.findall(text.lower()):
+                stem = word[:5]
+                h = int(hashlib.md5(stem.encode()).hexdigest(), 16)
+                vec[h % self.dim] += 1.0
+            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+            out.append([v / norm for v in vec])
+        return out
+
+
+def _fragment_of(prompt: str, quote: str) -> int | None:
+    pos = prompt.find(quote)
+    if pos < 0:
+        return None
+    headers = [(m.start(), int(m.group(1))) for m in re.finditer(r"^\[(\d+)\]", prompt, re.M)]
+    found = None
+    for start, index in headers:
+        if start <= pos:
+            found = index
+    return found
+
+
+class FakeLLM:
+    """Отвечает по плану: правило → список (цитата, пояснение). Цитата попадает в ответ,
+    только если она есть в тексте запроса — как у честной модели. `safe` — условия, которые
+    модель проверила и вернула с вердиктом `risk=false`; `reject` — цитаты, которые второй взгляд
+    не подтверждает."""
+
+    def __init__(self, plan: dict[str, list[tuple[str, str]]] | None = None, *, invent: dict | None = None,
+                 safe: dict[str, list[str]] | None = None, delay: float = 0.0,
+                 passport: dict[str, tuple[str, str]] | None = None, reject: list[str] | None = None,
+                 conflicts: dict[str, list[tuple[str, str]]] | None = None):
+        self.conflicts = conflicts or {}
+        self.plan = plan or {}
+        self.invent = invent or {}
+        self.safe = safe or {}
+        self.reject = reject or []
+        self.passport = passport or {}
+        self.delay = delay
+        self.requests: list[dict] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.requests.append(body)
+        if self.delay:
+            time.sleep(self.delay)
+        prompt = body["messages"][-1]["content"]
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "batch_meta":
+            m = re.search(r"Наименование объекта закупки:\s*([^\n.]+)", prompt)
+            content = json.dumps({"subject": m.group(1) if m else None}, ensure_ascii=False)
+            return _ok(content)
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "clarification_request":
+            n = len(re.findall(r"^\[(\d+)\]", prompt, re.M))
+            items = [{"index": i, "request": f"Просим разъяснить условие {i}."} for i in range(1, n + 1)]
+            return _ok(json.dumps({"items": items}, ensure_ascii=False))
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "finding_verdict":
+            m = re.search(r"Проверяемое условие: «(.*)»", prompt, re.S)
+            quote = m.group(1) if m else ""
+            risk = not any(r in quote or quote in r for r in self.reject)
+            return _ok(json.dumps({"check": "второй взгляд", "risk": risk}, ensure_ascii=False))
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "procurement_passport":
+            fields = [{"key": key, "value": value, "fragment": _fragment_of(prompt, quote), "quote": quote}
+                      for key, (value, quote) in self.passport.items()]
+            return _ok(json.dumps({"fields": fields}, ensure_ascii=False))
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "package_conflicts":
+            conditions = [
+                {"key": key, "values": [{"fragment": _fragment_of(prompt, q), "value": v, "quote": q} for v, q in values],
+                 "contradiction": True, "explanation": "Значения расходятся.", "recommendation": "Запросить разъяснение."}
+                for key, values in self.conflicts.items()]
+            return _ok(json.dumps({"conditions": conditions}, ensure_ascii=False))
+        codes = re.findall(r"^### (R-\d+)\.", prompt, re.M)
+        rules = []
+        for code in codes:
+            findings = []
+            for quote, explanation in self.plan.get(code, []):
+                fragment = _fragment_of(prompt, quote)
+                if fragment is not None:
+                    findings.append({"fragment": fragment, "quote": quote, "check": "условие нарушает порог",
+                                     "risk": True, "explanation": explanation,
+                                     "recommendation": f"Запросить разъяснение по {code}", "confidence": 0.9})
+            for quote in self.safe.get(code, []):
+                fragment = _fragment_of(prompt, quote)
+                if fragment is not None:
+                    findings.append({"fragment": fragment, "quote": quote, "check": "в пределах порога",
+                                     "risk": False, "explanation": "", "recommendation": "", "confidence": 0.8})
+            for quote in self.invent.get(code, []):
+                findings.append({"fragment": 1, "quote": quote, "check": "", "risk": True, "explanation": "выдумано",
+                                 "confidence": 0.7})
+            rules.append({"rule_code": code, "findings": findings})
+        return _ok(json.dumps({"rules": rules}, ensure_ascii=False))
+
+    def client(self, **settings) -> LLMClient:
+        return make_client(self.handler, **settings)
+
+
+def _ok(content: str, usage: dict | None = None) -> httpx.Response:
+    return httpx.Response(200, json={
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+        "usage": usage or {"prompt_tokens": 100, "completion_tokens": 20, "cost": 0.0001},
+    })
+
+
+def make_client(handler: Callable[[httpx.Request], httpx.Response], **overrides) -> LLMClient:
+    values = {"llm_model": "test/model", "llm_api_key": "test-key", "llm_max_retries": 2, "llm_cache": False}
+    values.update(overrides)
+    settings = Settings(**values)
+    return LLMClient(settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
