@@ -1,6 +1,8 @@
-import { Layers, ListChecks, LogOut, Upload } from 'lucide-react';
+import { HelpCircle, Layers, ListChecks, LogOut, Upload } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useMatches } from 'react-router';
 import { useAuth } from '../auth';
+import { UserGuideModal } from './UserGuideModal';
 
 export function Logo({ compact }: { compact?: boolean }) {
   return (
@@ -22,11 +24,21 @@ interface RouteHandle {
 export function AppLayout() {
   const { me, canEditRules, signOut } = useAuth();
   const compact = useMatches().some((m) => (m.handle as RouteHandle | undefined)?.compactSidebar);
+  const [guideOpen, setGuideOpen] = useState(false);
+
+  useEffect(() => {
+    // Автоматический запуск руководства при первом открытии приложения
+    if (typeof window !== 'undefined' && !localStorage.getItem('b2b_user_guide_seen')) {
+      setGuideOpen(true);
+    }
+  }, []);
+
   const nav = [
     { to: '/batches', label: 'Пакеты', icon: <Layers size={18} />, end: false },
     { to: '/upload', label: 'Загрузить пакет', icon: <Upload size={18} />, end: true },
     ...(canEditRules ? [{ to: '/rules', label: 'Правила', icon: <ListChecks size={18} />, end: false }] : []),
   ];
+
   return (
     <div className="app">
       <aside className={compact ? 'sidebar sidebar--compact' : 'sidebar'}>
@@ -47,6 +59,17 @@ export function AppLayout() {
             </NavLink>
           ))}
         </nav>
+
+        <button
+          type="button"
+          className="sidebar__link sidebar__guide-btn"
+          onClick={() => setGuideOpen(true)}
+          title={compact ? 'Руководство пользователя' : undefined}
+        >
+          <HelpCircle size={18} />
+          {!compact && <span>Руководство</span>}
+        </button>
+
         {me && (
           <div className="sidebar__user">
             <span className="avatar" title={compact ? `${me.full_name} · ${me.role_label}` : undefined}>
@@ -67,6 +90,14 @@ export function AppLayout() {
       <main className="main">
         <Outlet />
       </main>
+
+      <UserGuideModal
+        isOpen={guideOpen}
+        onClose={() => {
+          localStorage.setItem('b2b_user_guide_seen', 'true');
+          setGuideOpen(false);
+        }}
+      />
     </div>
   );
 }

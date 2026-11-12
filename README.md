@@ -1,10 +1,45 @@
-# Светофор рисков
+# Светофор рисков (B2B Tender)
 
-Умный помощник для тендерных специалистов: проверяет закупочную документацию по настраиваемому чек-листу и показывает риски в формате светофора — с цитатой, разделом документа и объяснением.
+Умный помощник для тендерных специалистов и юристов: проверяет закупочную документацию по настраиваемому чек-листу правил и показывает риски в формате светофора — с точной цитатой, разделом документа, оценкой уверенности и объяснением.
 
 Решение для кейс-чемпионата B2B-РТС, Задача 1 «Светофор рисков документов».
 
-## Запуск
+---
+
+## Быстрый старт для пользователя
+
+Познакомиться с возможностями системы можно за 2 минуты без развёртывания бэкенда — на встроенном моке API:
+
+### 1. Запуск интерфейса
+```bash
+cd frontend
+npm install
+npm run dev:mock
+```
+Откройте в браузере **http://localhost:5173**.
+
+### 2. Вход в систему
+На экране авторизации нажмите на любую из предустановленных ролей (пароль `demo` подставится автоматически):
+- **`methodologist`** (Методолог) — настройка чек-листов, правил и порогов.
+- **`lawyer`** (Юрист) — приём/отклонение рисков в редакторе, правовые комментарии.
+- **`specialist`** (Специалист) — загрузка пакетов и скачивание отчётов.
+
+### 3. Интерактивный гид
+При первом входе автоматически запустится **нативный интерактивный тур**, который познакомит со всеми ключевыми функциями системы за 7 коротких шагов. Вы в любой момент можете открыть его повторно, нажав кнопку **«Руководство»** с иконкой знака вопроса/книги в боковом меню.
+
+### 4. Демонстрационный пакет
+- **Готовый пакет в системе:** в списке пакетов уже предзагружен пакет **«Закупка_0001»** (*Поставка серверного оборудования*). Откройте его, чтобы увидеть готовый разбор: сводные счётчики, паспорт закупки, сработавшие правила, а также перейти в редактор документа с выносками на полях.
+- **Тестовые файлы для загрузки:** чтобы протестировать процесс загрузки и конвейер обработки самостоятельно, скачайте готовый архив с документами закупки:
+  - 📥 **[Скачать demo-package.zip](frontend/public/demo-package.zip)** (содержит проект контракта с заложенными рисками, техническое задание и извещение).
+  - Исходные файлы пакета также доступны в каталоге [`demo-package/`](demo-package/).
+
+### 5. Руководство пользователя
+Подробная инструкция по всем функциям системы (вход, форматы файлов, лимиты, чтение светофора, ручная пометка цитат, выгрузка DOCX/PDF/Excel и действия при сбоях) доступна в документе:
+📖 **[docs/user-guide.md](docs/user-guide.md)**.
+
+---
+
+## Запуск полного окружения (Docker Compose)
 
 Нужен только Docker с Compose. Первая сборка занимает несколько минут: образ воркеров содержит LibreOffice, Tesseract и модель эмбеддингов.
 
@@ -84,8 +119,7 @@ docker-compose logs -f worker worker-ocr
 Вход сохраняет сессию в cookie, остальные запросы идут с ней. Ошибки приходят в формате `{"error": {"code", "message", "details"}}`, текст — по-русски.
 
 ```bash
-curl -c cookies.txt -H 'Content-Type: application/json' \
-  -d '{"login": "specialist", "password": "demo"}' http://localhost:8000/api/auth/login
+curl -c cookies.txt -H 'Content-Type: application/json'   -d '{"login": "specialist", "password": "demo"}' http://localhost:8000/api/auth/login
 ```
 
 Создать черновик пакета, загрузить в него файлы и запустить проверку; в ответе на первый запрос — `id` пакета:
@@ -119,8 +153,7 @@ curl -b cookies.txt http://localhost:8000/api/documents/$DOCUMENT_ID
 ```
 
 ```bash
-curl -b cookies.txt -X PATCH -H 'Content-Type: application/json' \
-  -d '{"version": 1, "status": "accepted"}' http://localhost:8000/api/findings/$FINDING_ID
+curl -b cookies.txt -X PATCH -H 'Content-Type: application/json'   -d '{"version": 1, "status": "accepted"}' http://localhost:8000/api/findings/$FINDING_ID
 ```
 
 Выгрузка пакета: zip с размеченными документами и `Сводка.xlsx`. Запрос ставит задачу в очередь, статус содержит `download_url`:
@@ -156,8 +189,7 @@ curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH_ID/rerun
 Новое правило без изменения кода (роль `methodologist`): проверить черновик на своём тексте или на документе (`"document_id"` вместо `"text"`), затем сохранить. Правило действует на пакеты, запущенные после сохранения:
 
 ```bash
-curl -c cookies.txt -H 'Content-Type: application/json' \
-  -d '{"login": "methodologist", "password": "demo"}' http://localhost:8000/api/auth/login
+curl -c cookies.txt -H 'Content-Type: application/json'   -d '{"login": "methodologist", "password": "demo"}' http://localhost:8000/api/auth/login
 ```
 
 ```bash
@@ -189,8 +221,7 @@ curl -b cookies.txt http://localhost:8000/api/rules
 
 ```bash
 # Ответ только из документов пакета, с цитатами; found=false — в документах ответа нет
-curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/ask \
-  -H 'Content-Type: application/json' -d '{"question": "Какой срок поставки?"}'
+curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/ask   -H 'Content-Type: application/json' -d '{"question": "Какой срок поставки?"}'
 
 # Вывод для руководителя по находкам после ревью
 curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/brief
@@ -199,19 +230,22 @@ curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/brief
 curl -b cookies.txt -X POST http://localhost:8000/api/batches/$BATCH/clarification
 
 # Черновик правила из описания риска, только методолог; ничего не сохраняет
-curl -b cookies.txt -X POST http://localhost:8000/api/rules/draft \
-  -H 'Content-Type: application/json' -d '{"description": "Заказчик требует страховать товар за счёт поставщика"}'
+curl -b cookies.txt -X POST http://localhost:8000/api/rules/draft   -H 'Content-Type: application/json' -d '{"description": "Заказчик требует страховать товар за счёт поставщика"}'
 
 # Страница исходного PDF с рамками цитаты: сверка находки с оригиналом
 curl -b cookies.txt http://localhost:8000/api/findings/$FINDING/source
 ```
 
-## Документация
+---
+
+## Документация проекта
 
 | Документ | Что внутри |
-| --- | --- |
+|---|---|
+| 📖 **[docs/user-guide.md](docs/user-guide.md)** | **Руководство пользователя: вход, загрузка, светофор, выноски, выгрузка и решение проблем** |
 | [docs/hackathon.md](docs/hackathon.md) | Задание, формат, критерии приёмки, требования к стеку и развёртыванию |
 | [docs/tasks.md](docs/tasks.md) | Требования, распределение по команде, общие контракты |
 | [docs/interface.md](docs/interface.md) | Экраны, компоненты и состояния интерфейса |
 | [docs/glossary.md](docs/glossary.md) | Термины закупок и продукта |
 | [CLAUDE.md](CLAUDE.md) | Контекст и правила для работы с ИИ-ассистентами |
+| [frontend/README.md](frontend/README.md) | Архитектура и запуск фронтенд-приложения |
