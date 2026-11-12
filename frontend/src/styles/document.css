@@ -220,7 +220,7 @@
 
 .editor__grid {
   display: grid;
-  grid-template-columns: minmax(520px, 680px) 36px minmax(260px, 310px);
+  grid-template-columns: minmax(520px, 680px) 36px minmax(260px, 1fr);
   align-items: start;
 }
 

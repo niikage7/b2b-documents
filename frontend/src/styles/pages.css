@@ -593,8 +593,8 @@
 .ask__form { display: flex; gap: 8px; }
 .ask__form .input { flex: 1; }
 .ask__suggested { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { border: 1px solid var(--border, #d9dde3); background: transparent; border-radius: 16px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
-.chip:hover { background: var(--surface-hover, #f2f4f7); }
+.ask__suggested .chip { border: 1px solid var(--border, #d9dde3); background: transparent; border-radius: 16px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.ask__suggested .chip:hover { background: var(--surface-hover, #f2f4f7); }
 .ask__item { border-top: 1px solid var(--border, #d9dde3); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .ask__question { display: flex; align-items: center; gap: 6px; font-weight: 600; }
 .ask__answer { margin: 0; }
