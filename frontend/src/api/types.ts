@@ -503,6 +503,11 @@ export interface RuleVariable {
   value: string;
 }
 
+export interface RuleSuppression {
+  exclude_words: string[];
+  threshold: { operator: 'lt' | 'lte' | 'gt' | 'gte'; value: number; unit: string } | null;
+}
+
 export interface SystemVariable {
   name: string;
   type: 'auto';
@@ -526,6 +531,7 @@ export interface Rule extends RuleListItem {
   description: string;
   prompt_template: string;
   variables: RuleVariable[];
+  suppression: RuleSuppression;
   updated_at: string | null;
   updated_by: { full_name: string } | null;
   version: number;
@@ -541,6 +547,7 @@ export interface RuleInput {
   kind: RuleKind;
   prompt_template: string;
   variables: RuleVariable[];
+  suppression: RuleSuppression;
   enabled: boolean;
 }
 

@@ -24,6 +24,7 @@ from contracts.analysis import (
     PackageFinding,
     RuleGroupResult,
     RuleSpec,
+    RuleSuppression,
     RuleVariable,
 )
 from contracts.document import Block, ChunkRecord
@@ -314,6 +315,7 @@ def version_to_spec(version: RuleVersion) -> RuleSpec:
         id=str(version.rule_id), version_id=str(version.id), code=snap["code"], title=snap["title"],
         description=snap["description"], level=snap["level"], kind=snap["kind"],
         prompt_template=snap["prompt_template"], variables=[RuleVariable(**v) for v in snap.get("variables", [])],
+        suppression=RuleSuppression.model_validate(snap.get("suppression") or {}),
         enabled=True,
         query_embedding=list(version.query_embedding) if version.query_embedding is not None else None,
     )

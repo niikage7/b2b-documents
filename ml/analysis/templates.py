@@ -58,6 +58,14 @@ def validate_rule(rule: RuleSpec) -> tuple[list[FieldError], list[str]]:
         errors.append(FieldError("prompt_template", "В инструкции смыслового правила нужна переменная {фрагмент}"))
     if not rule.prompt_template.strip():
         errors.append(FieldError("prompt_template", "Инструкция для ИИ не заполнена"))
+    words = rule.suppression.exclude_words
+    if any(not word.strip() or len(word) > 80 for word in words):
+        errors.append(FieldError("suppression.exclude_words", "Исключение — от 1 до 80 символов"))
+    if len({word.strip().casefold() for word in words}) != len(words):
+        errors.append(FieldError("suppression.exclude_words", "Исключения не должны повторяться"))
+    threshold = rule.suppression.threshold
+    if threshold and (not -1_000_000_000 <= threshold.value <= 1_000_000_000 or not threshold.unit.strip()):
+        errors.append(FieldError("suppression.threshold", "Укажите конечное значение и единицу измерения"))
     for name in seen - set(used):
         warnings.append(f"Переменная {{{name}}} описана, но не используется в инструкции")
     return errors, warnings

@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from contracts.analysis import SYSTEM_VARIABLES, RuleSpec, RuleVariable
+from contracts.analysis import SYSTEM_VARIABLES, RuleSpec, RuleSuppression, RuleVariable
 from db.errors import Conflict, NotFound, ValidationFailed, VersionConflict
 from db.findings import iso
 from db.models import Batch, Finding, Rule, RuleProfile, RuleVersion, User
@@ -22,7 +22,7 @@ from db.models import Batch, Finding, Rule, RuleProfile, RuleVersion, User
 MAX_LLM_RULES = 5
 """Правил типа `llm` (весь документ окнами) в профиле — не больше: каждое читает документ целиком."""
 
-_FIELDS = ("code", "title", "description", "level", "kind", "prompt_template", "variables", "enabled")
+_FIELDS = ("code", "title", "description", "level", "kind", "prompt_template", "variables", "suppression", "enabled")
 
 
 REVIEW_WINDOW_DAYS = 90
@@ -108,6 +108,7 @@ def rule_to_spec(rule: Rule, *, query_embedding: Sequence[float] | None = None) 
         version_id=str(rule.current_version_id) if rule.current_version_id else None,
         code=rule.code, title=rule.title, description=rule.description, level=rule.level, kind=rule.kind,
         prompt_template=rule.prompt_template, variables=[RuleVariable(**v) for v in rule.variables or []],
+        suppression=RuleSuppression.model_validate(rule.suppression or {}),
         enabled=rule.enabled, query_embedding=list(query_embedding) if query_embedding is not None else None,
     )
 
@@ -135,7 +136,8 @@ def _validate(s: Session, profile_id: uuid.UUID, data: dict, *, rule_id: uuid.UU
         raise ValidationFailed(fields)
     spec = RuleSpec(code=data["code"], title=data["title"], description=data["description"], level=data["level"],
                     kind=data["kind"], prompt_template=data["prompt_template"],
-                    variables=[RuleVariable(**v) for v in data.get("variables") or []])
+                    variables=[RuleVariable(**v) for v in data.get("variables") or []],
+                    suppression=RuleSuppression.model_validate(data.get("suppression") or {}))
     errors, warnings = validate_rule(spec)
     for err in errors:
         fields.setdefault(err.field, err.message)
@@ -170,6 +172,7 @@ def _save_new_rule(s: Session, profile_id: uuid.UUID, data: dict, *, actor_id=No
     rule = Rule(profile_id=profile_id, code=data["code"].strip(), title=data["title"].strip(),
                 description=data["description"].strip(), level=data["level"], kind=data["kind"],
                 prompt_template=data["prompt_template"].strip(), variables=list(data.get("variables") or []),
+                suppression=RuleSuppression.model_validate(data.get("suppression") or {}).model_dump(),
                 enabled=data.get("enabled", True), version=1, updated_by=_id(actor_id) if actor_id else None)
     s.add(rule)
     s.flush()
@@ -239,6 +242,7 @@ def rule_view(s: Session, rule: Rule) -> dict:
         "id": str(rule.id), "profile_id": str(rule.profile_id), "code": rule.code, "title": rule.title,
         "description": rule.description, "level": rule.level, "kind": rule.kind,
         "prompt_template": rule.prompt_template, "variables": rule.variables or [], "enabled": rule.enabled,
+        "suppression": RuleSuppression.model_validate(rule.suppression or {}).model_dump(),
         "hits_30d": _hits_30d(s, [rule.id]).get(rule.id, 0),
         "review": _review_view(_review_stats(s, [rule.id]).get(rule.id)), "updated_at": iso(rule.updated_at),
         "updated_by": {"full_name": user.full_name} if user else None, "version": rule.version,

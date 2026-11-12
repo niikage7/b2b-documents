@@ -266,6 +266,7 @@ class Rule(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
     variables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    suppression: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=sql_text("true"))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(

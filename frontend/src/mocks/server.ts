@@ -783,6 +783,7 @@ export function createMockTransport(): MockTransport {
       kind: body.kind as RuleInput['kind'],
       prompt_template: String(body.prompt_template ?? '').trim(),
       variables: Array.isArray(body.variables) ? (body.variables as RuleInput['variables']) : [],
+      suppression: body.suppression && typeof body.suppression === 'object' ? body.suppression as RuleInput['suppression'] : { exclude_words: [], threshold: null },
       enabled: body.enabled === undefined ? true : Boolean(body.enabled),
     };
   }
