@@ -388,6 +388,7 @@ export function ruleView(state: MockState, rule: MRule): Rule {
     kind: rule.kind,
     prompt_template: rule.prompt_template,
     variables: rule.variables,
+    suppression: rule.suppression ?? { exclude_words: [], threshold: null },
     enabled: rule.enabled,
     hits_30d: hits30d(state, rule.id),
     review: ruleReview(state, rule.id),

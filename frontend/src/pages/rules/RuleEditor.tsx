@@ -21,6 +21,7 @@ export function emptyRule(profileId: string): RuleInput {
     kind: 'semantic_llm',
     prompt_template: 'Проверь {фрагмент}: ',
     variables: [],
+    suppression: { exclude_words: [], threshold: null },
     enabled: true,
   };
 }
@@ -35,6 +36,7 @@ export function ruleToInput(rule: Rule): RuleInput {
     kind: rule.kind,
     prompt_template: rule.prompt_template,
     variables: rule.variables.map((v) => ({ ...v })),
+    suppression: { exclude_words: rule.suppression?.exclude_words ?? [], threshold: rule.suppression?.threshold ?? null },
     enabled: rule.enabled,
   };
 }
@@ -247,6 +249,7 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
   const [showVars, setShowVars] = useState(false);
   const [touched, setTouched] = useState(false);
   const [sample, setSample] = useState<string>();
+  const [exclusionText, setExclusionText] = useState(() => draft.suppression.exclude_words.join('; '));
   const templateRef = useRef<HTMLTextAreaElement>(null);
   const check = useMemo(() => validateRule(draft), [draft]);
   const errors = { ...(touched ? check.fields : {}), ...serverErrors };
@@ -458,6 +461,33 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
             </p>
           </div>
         )}
+
+        <section className="rule-suppression" aria-label="Условия неприменения правила">
+          <h3>Когда правило не должно срабатывать</h3>
+          <p className="field__hint">Настройки сохраняются вместе с версией правила. Применение в анализе подключает команда движка; сейчас тест ниже проверяет только основную инструкцию.</p>
+          <Field label="Слова-исключения" htmlFor="rule-exclusions" hint="Фразы через точку с запятой. Например: или эквивалент; по согласованию сторон" error={errors['suppression.exclude_words']}>
+            <textarea id="rule-exclusions" className="textarea" rows={2} value={exclusionText} onChange={(e) => { setExclusionText(e.target.value); set('suppression', { ...draft.suppression, exclude_words: e.target.value.split(';').map((x) => x.trim()).filter(Boolean) }); }} />
+          </Field>
+          <label className="row rule-suppression__toggle">
+            <input type="checkbox" checked={draft.suppression.threshold !== null} onChange={(e) => set('suppression', { ...draft.suppression, threshold: e.target.checked ? { operator: 'lte', value: 0, unit: '' } : null })} />
+            Не срабатывать при числовом условии
+          </label>
+          {draft.suppression.threshold && (
+            <div className="rule-suppression__threshold">
+              <label>Если значение
+                <select className="select" aria-label="Сравнение порога" value={draft.suppression.threshold.operator} onChange={(e) => set('suppression', { ...draft.suppression, threshold: { ...draft.suppression.threshold!, operator: e.target.value as 'lt' | 'lte' | 'gt' | 'gte' } })}>
+                  <option value="lt">меньше</option><option value="lte">не больше</option><option value="gt">больше</option><option value="gte">не меньше</option>
+                </select>
+              </label>
+              <Field label="Порог" error={errors['suppression.threshold']}>
+                <input className="input" type="number" step="any" value={draft.suppression.threshold.value} onChange={(e) => set('suppression', { ...draft.suppression, threshold: { ...draft.suppression.threshold!, value: Number(e.target.value) } })} />
+              </Field>
+              <Field label="Единица измерения" error={errors['suppression.threshold']}>
+                <input className="input" value={draft.suppression.threshold.unit} maxLength={40} placeholder="дней, %, рублей" onChange={(e) => set('suppression', { ...draft.suppression, threshold: { ...draft.suppression.threshold!, unit: e.target.value } })} />
+              </Field>
+            </div>
+          )}
+        </section>
 
         {(warnings.length > 0 || (!touched && check.warnings.length > 0)) && (
           <div className="note">

@@ -13,6 +13,7 @@ import type {
   Level,
   Role,
   RuleKind,
+  RuleSuppression,
   RuleVariable,
   Stage,
   StageDetail,
@@ -60,6 +61,7 @@ export interface MRule {
   kind: RuleKind;
   prompt_template: string;
   variables: RuleVariable[];
+  suppression?: RuleSuppression;
   enabled: boolean;
   version: number;
   updated_at: string;

@@ -42,6 +42,17 @@ class RuleVariable(BaseModel):
     value: str
 
 
+class SuppressionThreshold(BaseModel):
+    operator: Literal["lt", "lte", "gt", "gte"]
+    value: float
+    unit: str = Field("", max_length=40)
+
+
+class RuleSuppression(BaseModel):
+    exclude_words: list[str] = Field(default_factory=list, max_length=30)
+    threshold: SuppressionThreshold | None = None
+
+
 class RuleSpec(BaseModel):
     """Правило, как его исполняет движок. Версия — та, что зафиксирована на старте пакета."""
 
@@ -55,6 +66,7 @@ class RuleSpec(BaseModel):
     prompt_template: str
     variables: list[RuleVariable] = Field(default_factory=list)
     enabled: bool = True
+    suppression: RuleSuppression = Field(default_factory=RuleSuppression)
     query_embedding: list[float] | None = Field(
         None, description="`rule_version.query_embedding`: эмбеддинг строки поиска для semantic_llm"
     )

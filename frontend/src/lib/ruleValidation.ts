@@ -18,7 +18,7 @@ export interface RuleCheck {
   warnings: string[];
 }
 
-export function validateRule(rule: Pick<RuleInput, 'code' | 'title' | 'description' | 'level' | 'kind' | 'prompt_template' | 'variables'>): RuleCheck {
+export function validateRule(rule: Pick<RuleInput, 'code' | 'title' | 'description' | 'level' | 'kind' | 'prompt_template' | 'variables'> & { suppression?: RuleInput['suppression'] }): RuleCheck {
   const fields: Record<string, string> = {};
   const set = (field: string, message: string) => {
     if (!(field in fields)) fields[field] = message;
@@ -47,6 +47,11 @@ export function validateRule(rule: Pick<RuleInput, 'code' | 'title' | 'descripti
   if (rule.kind === 'semantic_llm' && !used.includes('фрагмент')) {
     set('prompt_template', 'В инструкции смыслового правила нужна переменная {фрагмент}');
   }
+  const words = rule.suppression?.exclude_words ?? [];
+  if (words.length > 30 || words.some((w) => !w.trim() || w.length > 80)) set('suppression.exclude_words', 'До 30 исключений, каждое от 1 до 80 символов');
+  if (new Set(words.map((w) => w.trim().toLocaleLowerCase('ru-RU'))).size !== words.length) set('suppression.exclude_words', 'Исключения не должны повторяться');
+  const threshold = rule.suppression?.threshold;
+  if (threshold && (!Number.isFinite(threshold.value) || Math.abs(threshold.value) > 1_000_000_000 || !threshold.unit.trim())) set('suppression.threshold', 'Укажите число и единицу измерения');
   const warnings = [...seen].filter((name) => !used.includes(name)).map((name) => `Переменная {${name}} описана, но не используется в инструкции`);
   return { fields, warnings };
 }

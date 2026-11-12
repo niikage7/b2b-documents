@@ -74,6 +74,17 @@ class VariableIn(BaseModel):
     value: str = Field("", max_length=5000)
 
 
+class ThresholdIn(BaseModel):
+    operator: Literal["lt", "lte", "gt", "gte"]
+    value: float
+    unit: str = Field("", max_length=40)
+
+
+class SuppressionIn(BaseModel):
+    exclude_words: list[str] = Field(default_factory=list, max_length=30)
+    threshold: ThresholdIn | None = None
+
+
 class RuleIn(BaseModel):
     profile_id: uuid.UUID | None = None
     code: str = Field(max_length=40)
@@ -83,6 +94,7 @@ class RuleIn(BaseModel):
     kind: Literal["semantic_llm", "llm"]
     prompt_template: str = Field(max_length=20000)
     variables: list[VariableIn] = Field(default_factory=list, max_length=50)
+    suppression: SuppressionIn = Field(default_factory=SuppressionIn)
     enabled: bool = True
 
 
@@ -95,6 +107,7 @@ class RulePatch(BaseModel):
     kind: Literal["semantic_llm", "llm"] | None = None
     prompt_template: str | None = Field(None, max_length=20000)
     variables: list[VariableIn] | None = Field(None, max_length=50)
+    suppression: SuppressionIn | None = None
     enabled: bool | None = None
 
 
@@ -160,6 +173,7 @@ class RuleDraft(BaseModel):
     kind: Literal["semantic_llm", "llm"]
     prompt_template: str = Field("", max_length=20000)
     variables: list[VariableIn] = Field(default_factory=list, max_length=50)
+    suppression: SuppressionIn = Field(default_factory=SuppressionIn)
 
 
 class RuleTestIn(BaseModel):
@@ -191,7 +205,8 @@ def _check_draft(rule: RuleDraft) -> dict:
         raise ValidationFailed(fields)
     spec = RuleSpec(code=rule.code.strip(), title=rule.title, description=rule.description, level=rule.level,
                     kind=rule.kind, prompt_template=rule.prompt_template,
-                    variables=[RuleVariable(**v.model_dump()) for v in rule.variables])
+                    variables=[RuleVariable(**v.model_dump()) for v in rule.variables],
+                    suppression=rule.suppression.model_dump())
     errors, _ = validate_rule(spec)
     for err in errors:
         fields.setdefault(err.field, err.message)
