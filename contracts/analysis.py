@@ -141,9 +141,11 @@ class DroppedFinding(BaseModel):
 
     rule_code: str
     quote: str
-    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk", "not_confirmed"]
+    reason: Literal["quote_not_found", "unknown_rule", "duplicate", "empty_quote", "no_risk", "not_confirmed",
+                    "excluded"]
     best_score: float | None = None
     note: str | None = Field(None, description="Как модель сравнила условие с правилом (`check`)")
+    matched: str | None = Field(None, description="Слово-исключение правила, из-за которого находка отброшена")
 
 
 class LLMUsage(BaseModel):

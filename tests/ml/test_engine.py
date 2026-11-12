@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from bench.samples import EXPECTED, SUBJECT, make_contract_docx, make_notice_docx
-from contracts.analysis import RuleSpec
+from contracts.analysis import RuleSpec, RuleSuppression
 from ml.analysis.batch_meta import extract_batch_meta
 from ml.analysis.blocks import blocks_from_extraction, blocks_from_text, chunk_blocks
 from ml.analysis.engine import analyze_rule_group, group_rules
@@ -102,6 +102,48 @@ def test_no_risk_verdict_is_dropped(contract_blocks):
     result = analyze_rule_group(contract_blocks, [r04], llm=fake.client(), window_tokens=10_000)
     assert result.candidates == []
     assert [(d.reason, d.quote) for d in result.dropped] == [("no_risk", quote)]
+
+
+def test_exclusion_word_drops_finding(contract_blocks):
+    _, rules = load_default_checklist()
+    r01 = next(r for r in rules if r.code == "R-01")
+    quote = "сервер Lenovo ThinkSystem SR650 V3"
+    rule = r01.model_copy(update={"suppression": RuleSuppression(exclude_words=["ТОВАР"])})
+    fake = FakeLLM({"R-01": [(quote, "a")]})
+    result = analyze_rule_group(contract_blocks, [rule], llm=fake.client(), window_tokens=10_000)
+    assert result.candidates == []
+    assert [(d.reason, d.matched, d.quote) for d in result.dropped] == [("excluded", "ТОВАР", quote)]
+
+
+def test_exclusion_is_whole_word_or_phrase(contract_blocks):
+    _, rules = load_default_checklist()
+    r01 = next(r for r in rules if r.code == "R-01")
+    quote = "сервер Lenovo ThinkSystem SR650 V3"
+
+    def check(words: list[str]):
+        rule = r01.model_copy(update={"suppression": RuleSuppression(exclude_words=words)})
+        fake = FakeLLM({"R-01": [(quote, "a")]})
+        return analyze_rule_group(contract_blocks, [rule], llm=fake.client(), window_tokens=10_000)
+
+    # Часть слова и фраза из другого пункта не отсекают находку
+    kept = check(["товаров", "эквивалент"])
+    assert [c.quote for c in kept.candidates] == [quote] and kept.dropped == []
+    # Фраза из нескольких слов, регистр в документе другой
+    dropped = check(["сервер Lenovo"])
+    assert dropped.candidates == [] and dropped.dropped[0].matched == "сервер Lenovo"
+
+
+def test_rule_test_shows_exclusion_reason():
+    rule = RuleSpec(code="R-01", title="Товарный знак", description="Товар без эквивалента", level="warning",
+                    kind="llm", prompt_template="Проверь товарный знак.",
+                    suppression=RuleSuppression(exclude_words=["или эквивалент"]))
+    quote = "сервер Lenovo ThinkSystem SR650 V3"
+    fake = FakeLLM({"R-01": [(quote, "a")]})
+    result = run_rule_test(rule, text=f"Поставляемый товар: {quote} или эквивалент.", llm=fake.client(),
+                           embedder=EMBEDDER)
+    assert result.findings == []
+    assert [(c.reason, c.note) for c in result.considered] == [
+        ("Сработало слово-исключение правила", "«или эквивалент»")]
 
 
 def _verdicts(fake: FakeLLM) -> list[dict]:

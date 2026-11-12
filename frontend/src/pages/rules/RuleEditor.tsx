@@ -464,7 +464,7 @@ export function RuleEditor({ rule, draft, onChange, onSave, onCancel, onDelete, 
 
         <section className="rule-suppression" aria-label="Условия неприменения правила">
           <h3>Когда правило не должно срабатывать</h3>
-          <p className="field__hint">Настройки сохраняются вместе с версией правила. Применение в анализе подключает команда движка; сейчас тест ниже проверяет только основную инструкцию.</p>
+          <p className="field__hint">Настройки сохраняются вместе с версией правила. Слова-исключения действуют в анализе и в тесте ниже: находка с такой фразой в пункте отбрасывается. Числовой порог пока не применяется.</p>
           <Field label="Слова-исключения" htmlFor="rule-exclusions" hint="Фразы через точку с запятой. Например: или эквивалент; по согласованию сторон" error={errors['suppression.exclude_words']}>
             <textarea id="rule-exclusions" className="textarea" rows={2} value={exclusionText} onChange={(e) => { setExclusionText(e.target.value); set('suppression', { ...draft.suppression, exclude_words: e.target.value.split(';').map((x) => x.trim()).filter(Boolean) }); }} />
           </Field>

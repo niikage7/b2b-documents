@@ -28,6 +28,7 @@ REASONS = {
     "no_risk": "Модель проверила условие и риска не нашла",
     "not_confirmed": "Не подтвердилось при повторной проверке",
     "quote_not_found": "Модель процитировала текст, которого нет в документе",
+    "excluded": "Сработало слово-исключение правила",
 }
 MAX_CONSIDERED = 20
 _TEXT_DOC = "__text__"
@@ -94,7 +95,8 @@ def test_rule(
             )
         )
     dropped = sum(1 for d in result.dropped if d.reason == "quote_not_found")
-    considered = [RuleTestDropped(quote=d.quote[:300], reason=REASONS[d.reason], note=d.note)
+    considered = [RuleTestDropped(quote=d.quote[:300], reason=REASONS[d.reason],
+                                  note=d.note or (f"«{d.matched}»" if d.matched else None))
                   for d in result.dropped if d.reason in REASONS and d.quote.strip()][:MAX_CONSIDERED]
     return RuleTestResult(findings=findings, duration_ms=int((time.monotonic() - started) * 1000), dropped=dropped,
                           considered=considered)

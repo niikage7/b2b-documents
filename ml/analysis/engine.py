@@ -14,7 +14,10 @@
 
 Цитата из ответа привязывается к тексту блока; раздел и страницу находке даёт блок, а не
 ответ LLM. Ответ с вердиктом `risk=false` (условие проверено, риска нет) находкой не
-становится. Затем кандидат с уверенностью ниже `LLM_VERIFY_BELOW` проходит второй взгляд:
+становится. Находка отбрасывается и тогда, когда в блоке цитаты встретилось слово-исключение
+правила (`rule.suppression.exclude_words`): методолог задаёт фразы вроде «или эквивалент»,
+при которых правило не применяется, а причина `excluded` и сработавшая фраза остаются в
+`RuleGroupResult.dropped`. Затем кандидат с уверенностью ниже `LLM_VERIFY_BELOW` проходит второй взгляд:
 короткий вызов с одним правилом и одной цитатой в её пункте; кандидат, которого модель не
 подтвердила, уходит в отброшенные. Уровень находки — уровень правила.
 """
@@ -26,6 +29,7 @@ import re
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 
 from contracts.analysis import (
     DroppedFinding,
@@ -151,6 +155,22 @@ def _norm_code(code: str) -> str:
     return _CODE.sub("", code).upper()
 
 
+@lru_cache(maxsize=512)
+def _exclusion_pattern(word: str) -> re.Pattern[str]:
+    """Слово-исключение целиком: «товар» не совпадает с «товаров», пробелы в фразе — любые."""
+    parts = [re.escape(part) for part in word.split()]
+    return re.compile(r"(?<!\w)" + r"\s+".join(parts) + r"(?!\w)", re.IGNORECASE)
+
+
+def _matched_exclusion(text: str, rule: RuleSpec) -> str | None:
+    """Сработавшее слово-исключение правила или None: ищется в блоке цитаты, без учёта регистра."""
+    for word in rule.suppression.exclude_words:
+        word = word.strip()
+        if word and _exclusion_pattern(word).search(text):
+            return word
+    return None
+
+
 def analyze_rule_group(
     blocks: Sequence[BlockLike],
     rules: Sequence[RuleSpec],
@@ -233,7 +253,8 @@ def analyze_rule_group(
     result.checked_rules = [r.code for r in active]
     if result.dropped:
         for d in result.dropped:
-            log.info("analysis: находка отброшена: %s %s (балл %s): %.80s", d.rule_code, d.reason, d.best_score, d.quote)
+            log.info("analysis: находка отброшена: %s %s%s (балл %s): %.80s", d.rule_code, d.reason,
+                     f" «{d.matched}»" if d.matched else "", d.best_score, d.quote)
     return result
 
 
@@ -266,6 +287,12 @@ def _collect(call: _Call, data: LLMGroupResponse, result: RuleGroupResult) -> No
             if anchor is None:
                 result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote,
                                                      reason="quote_not_found", best_score=round(score, 1)))
+                continue
+            excluded = _matched_exclusion(anchor.block.text, rule)
+            if excluded:
+                # Слово-исключение методолога: правило к этому пункту не применяется
+                result.dropped.append(DroppedFinding(rule_code=rule.code, quote=finding.quote, reason="excluded",
+                                                     matched=excluded))
                 continue
             result.candidates.append(
                 FindingCandidate(
