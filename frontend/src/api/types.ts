@@ -172,6 +172,29 @@ export interface RuleReview {
   noisy: boolean;
 }
 
+/** Результат автоматического фильтра до создания находки. */
+export interface AutoRejectionReason {
+  code: string;
+  label: string;
+  count: number;
+}
+
+export interface RuleAutoRejections {
+  /** false, пока backend не сохраняет результаты фильтра между запусками. */
+  available: boolean;
+  total: number;
+  reasons: AutoRejectionReason[];
+  period_label: string;
+}
+
+/** Сверка с эталонной разметкой до и после включения фильтра. */
+export interface RuleQualityComparison {
+  available: boolean;
+  before: { precision: number | null; recall: number | null; found: number; expected: number } | null;
+  after: { precision: number | null; recall: number | null; found: number; expected: number } | null;
+  sample_label: string;
+}
+
 export interface PassportField {
   key: string;
   label: string;
@@ -495,6 +518,7 @@ export interface RuleListItem {
   enabled: boolean;
   hits_30d: number;
   review?: RuleReview;
+  auto_rejections?: RuleAutoRejections;
 }
 
 export interface Rule extends RuleListItem {

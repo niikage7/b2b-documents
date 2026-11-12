@@ -59,6 +59,16 @@ const MAX_BATCH_BYTES = 100 * 1024 * 1024;
 const ALLOWED = ['zip', 'pdf', 'docx', 'doc', 'rtf'];
 const TICK_MS = 700;
 
+function mockAutoRejections(code: string) {
+  const byRule: Record<string, [number, { code: string; label: string; count: number }[]]> = {
+    'R-01': [7, [{ code: 'no_risk', label: 'риск не подтвердился', count: 4 }, { code: 'duplicate', label: 'дубликат', count: 3 }]],
+    'R-02': [3, [{ code: 'not_confirmed', label: 'не подтвердилось повторно', count: 2 }, { code: 'quote_not_found', label: 'цитата не найдена', count: 1 }]],
+    'R-07': [2, [{ code: 'quote_not_found', label: 'цитата не найдена', count: 2 }]],
+  };
+  const [total, reasons] = byRule[code] ?? [0, []];
+  return { available: true, total, reasons, period_label: 'За 30 дней' };
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -665,6 +675,18 @@ export function createMockTransport(): MockTransport {
     persist();
     return [204];
   });
+  route('GET', '/rule-profiles/:id/quality', (ctx) => {
+    requireMethodologist(ctx);
+    const profile = state.profiles.find((p) => p.id === ctx.params.id);
+    if (!profile) throw notFound('Профиль не найден');
+    // Значения из docs/auto-filter-evaluation.md; в проде их подставляет контур бенчмарков.
+    return {
+      available: true,
+      before: { precision: 1, recall: 43 / 46, found: 43, expected: 46 },
+      after: { precision: 43 / 44, recall: 43 / 46, found: 44, expected: 46 },
+      sample_label: 'Эталон: 46 размеченных пунктов `clauses` · замер 31.10.2026',
+    };
+  });
 
   route('GET', '/rules/system-variables', () => [
     { name: 'фрагмент', type: 'auto', description: 'Найденный фрагмент документа' },
@@ -680,7 +702,10 @@ export function createMockTransport(): MockTransport {
       .filter((r) => !search || r.code.toLowerCase().includes(search) || r.title.toLowerCase().includes(search))
       .filter((r) => !kind || r.kind === kind)
       .sort((a, b) => a.code.localeCompare(b.code))
-      .map((r) => ({ id: r.id, code: r.code, title: r.title, kind: r.kind, level: r.level, enabled: r.enabled, hits_30d: hits30d(state, r.id), review: ruleReview(state, r.id) }));
+      .map((r) => ({
+        id: r.id, code: r.code, title: r.title, kind: r.kind, level: r.level, enabled: r.enabled,
+        hits_30d: hits30d(state, r.id), review: ruleReview(state, r.id), auto_rejections: mockAutoRejections(r.code),
+      }));
   });
   route('GET', '/rules/:id', (ctx) => {
     requireMethodologist(ctx);

@@ -8,6 +8,7 @@ export const keys = {
   me: ['me'] as const,
   config: ['config'] as const,
   profiles: ['profiles'] as const,
+  profileQuality: (id: string) => ['profile-quality', id] as const,
   batches: (params?: BatchListParams) => (params ? (['batches', params] as const) : (['batches'] as const)),
   batch: (id: string) => ['batch', id] as const,
   batchFindings: (id: string) => ['batch', id, 'findings'] as const,

@@ -214,6 +214,25 @@ def _review_view(item: dict | None) -> dict:
             "noisy": decided >= NOISY_MIN_DECISIONS and rejected > confirmed}
 
 
+def auto_rejections_stub() -> dict:
+    """Контракт для UI эффекта фильтра.
+
+    `DroppedFinding` пока хранится в артефакте задачи анализа, а не в БД, поэтому
+    историческую агрегацию здесь намеренно не имитируем. Когда появится журнал
+    кандидатов, этот ответ заменяется реальной группировкой по rule_id и reason.
+    """
+    return {"available": False, "total": 0, "reasons": [], "period_label": "За 30 дней"}
+
+
+def profile_quality_stub(s: Session, profile_id) -> dict:
+    """Контракт сравнения precision/recall на эталонной выборке (пока заглушка)."""
+    profile = s.get(RuleProfile, _id(profile_id))
+    if profile is None:
+        raise NotFound("Профиль не найден")
+    return {"available": False, "before": None, "after": None,
+            "sample_label": "Эталонная выборка ещё не подключена"}
+
+
 def rule_view(s: Session, rule: Rule) -> dict:
     user = s.get(User, rule.updated_by) if rule.updated_by else None
     return {
@@ -239,7 +258,8 @@ def list_rules(s: Session, *, profile_id=None, search: str | None = None, kind: 
     hits = _hits_30d(s, [r.id for r in rules])
     reviews = _review_stats(s, [r.id for r in rules])
     return [{"id": str(r.id), "code": r.code, "title": r.title, "kind": r.kind, "level": r.level,
-             "enabled": r.enabled, "hits_30d": hits.get(r.id, 0), "review": _review_view(reviews.get(r.id))}
+             "enabled": r.enabled, "hits_30d": hits.get(r.id, 0), "review": _review_view(reviews.get(r.id)),
+             "auto_rejections": auto_rejections_stub()}
             for r in rules]
 
 

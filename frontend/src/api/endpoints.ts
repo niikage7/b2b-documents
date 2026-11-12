@@ -24,6 +24,7 @@ import type {
   Recalc,
   RecentDocument,
   Rule,
+  RuleQualityComparison,
   RuleDraft,
   RuleInput,
   RuleListItem,
@@ -105,6 +106,8 @@ export const api = {
   deleteProfile: (profileId: string) => request<void>('DELETE', `/rule-profiles/${profileId}`),
   listRules: (params: { profile_id: string; search?: string; kind?: string }) =>
     request<RuleListItem[]>('GET', '/rules', { query: params }),
+  profileQuality: (profileId: string) =>
+    request<RuleQualityComparison>('GET', `/rule-profiles/${profileId}/quality`),
   getRule: (ruleId: string) => request<Rule>('GET', `/rules/${ruleId}`),
   createRule: (body: RuleInput) => request<Rule>('POST', '/rules', { body }),
   updateRule: (ruleId: string, body: Partial<RuleInput> & { version: number }) =>

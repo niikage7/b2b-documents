@@ -52,6 +52,16 @@ def update_profile(profile_id: uuid.UUID, body: ProfilePatch, user: Methodologis
     return rules.update_profile(s, profile_id, name=body.name, short_name=body.short_name, is_default=body.is_default)
 
 
+@router.get("/rule-profiles/{profile_id}/quality")
+def profile_quality(profile_id: uuid.UUID, user: Methodologist, s: DbSession) -> dict:
+    """Метрики эталонного набора до/после автофильтра; пока контрактная заглушка.
+
+    Их будет заполнять отдельный контур бенчмарков, чтобы рабочий API не запускал
+    дорогой анализ документов при открытии страницы правил.
+    """
+    return rules.profile_quality_stub(s, profile_id)
+
+
 @router.delete("/rule-profiles/{profile_id}", status_code=204)
 def delete_profile(profile_id: uuid.UUID, user: Methodologist, s: DbSession) -> None:
     """409 `default_profile` — профиль по умолчанию удалить нельзя."""

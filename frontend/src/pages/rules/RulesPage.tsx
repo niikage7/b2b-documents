@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ListChecks, MoreHorizontal, Pencil, Plus, Search, SearchX, Star, Trash2 } from 'lucide-react';
+import { BarChart3, Filter, ListChecks, MoreHorizontal, Pencil, Plus, Search, SearchX, Star, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBlocker } from 'react-router';
 import { api } from '../../api/endpoints';
 import { ApiError } from '../../api/http';
 import { keys, useProfiles } from '../../api/queries';
-import type { Level, Rule, RuleInput, RuleKind, RuleListItem, RuleProfile } from '../../api/types';
+import type { Level, Rule, RuleAutoRejections, RuleInput, RuleKind, RuleListItem, RuleProfile } from '../../api/types';
 import { useAuth } from '../../auth';
 import { ConfirmDialog, Dialog, EmptyState, ErrorState, errorMessage, ForbiddenState, ListSkeleton, Menu, useToast } from '../../components/feedback';
 import { Button, Field, LevelBadge, Skeleton, Toggle } from '../../components/ui';
@@ -14,6 +14,42 @@ import { useDebounced } from '../../lib/useDebounced';
 import { emptyRule, RuleEditor, ruleToInput, sameRule } from './RuleEditor';
 
 type Selection = { kind: 'none' } | { kind: 'new' } | { kind: 'rule'; id: string };
+
+function RejectionSummary({ value }: { value?: RuleAutoRejections }) {
+  if (!value?.available) return <span className="cell-sub">Подключается</span>;
+  if (!value.total) return <>—</>;
+  return (
+    <div className="rejection-summary" title={value.reasons.map((r) => `${r.label}: ${r.count}`).join('\n')}>
+      <strong>{value.total}</strong>
+      <span className="cell-sub">{value.reasons.map((r) => `${r.label} — ${r.count}`).join('; ')}</span>
+    </div>
+  );
+}
+
+function QualityComparison({ profileId }: { profileId: string }) {
+  const quality = useQuery({ queryKey: keys.profileQuality(profileId), queryFn: () => api.profileQuality(profileId), enabled: Boolean(profileId) });
+  if (quality.isPending) return <div className="quality-comparison quality-comparison--loading"><Skeleton width="55%" height={18} /><Skeleton width="90%" height={42} /></div>;
+  if (quality.isError || !quality.data?.available) {
+    return (
+      <section className="quality-comparison" aria-label="Эффект автоматического фильтра">
+        <div className="quality-comparison__head"><Filter size={18} /><div><h2>Эффект автоматического фильтра</h2><p>Данные появятся после подключения журнала отброшенных кандидатов.</p></div></div>
+        <p className="quality-comparison__hint">Интерфейс и контракт готовы: будут показаны причины отсева, а также точность и полнота на эталонной выборке до и после фильтра.</p>
+      </section>
+    );
+  }
+  const { before, after, sample_label: sample } = quality.data;
+  const percent = (value: number | null | undefined) => value == null ? '—' : `${Math.round(value * 100)} %`;
+  return (
+    <section className="quality-comparison" aria-label="Эффект автоматического фильтра">
+      <div className="quality-comparison__head"><BarChart3 size={18} /><div><h2>Эффект автоматического фильтра</h2><p>{sample}</p></div></div>
+      <div className="quality-comparison__metrics">
+        <div><span>Без фильтра</span><strong>Точность {percent(before?.precision)}</strong><small>Полнота {percent(before?.recall)}</small></div>
+        <div className="quality-comparison__after"><span>С фильтром</span><strong>Точность {percent(after?.precision)}</strong><small>Полнота {percent(after?.recall)}</small></div>
+      </div>
+      <p className="quality-comparison__hint">Сравнение фиксируется на одной и той же размеченной выборке; показатели по правилам — в таблице ниже.</p>
+    </section>
+  );
+}
 
 function ProfileDialog({ profile, profiles, onClose, onSaved }: { profile: RuleProfile | null; profiles: RuleProfile[]; onClose: () => void; onSaved: (p: RuleProfile) => void }) {
   const qc = useQueryClient();
@@ -330,6 +366,7 @@ function RulesWorkspace() {
 
       <div className={editorOpen ? 'rules-layout rules-layout--editor' : 'rules-layout'}>
         <div className="rules-layout__list">
+          {profileId && <QualityComparison profileId={profileId} />}
           <div className="filters" style={{ marginBottom: 14 }}>
             <label className="input-icon" style={{ flex: 1, minWidth: 200 }}>
               <Search size={17} />
@@ -381,6 +418,7 @@ function RulesWorkspace() {
                     <th>Правило</th>
                     <th>Уровень</th>
                     <th className="num" title="Сколько раз правило сработало за 30 дней">За 30 дней</th>
+                    <th className="num" title="Кандидаты, которые система не показала юристу: причина — во всплывающей подсказке">Автоотсев</th>
                     <th className="num" title="Доля находок правила, которые юристы подтвердили, за 90 дней">Подтверждено</th>
                   </tr>
                 </thead>
@@ -408,6 +446,7 @@ function RulesWorkspace() {
                         <LevelBadge level={r.level} small />
                       </td>
                       <td className="num">{r.hits_30d || '—'}</td>
+                      <td className="num"><RejectionSummary value={r.auto_rejections} /></td>
                       <td className="num" title={r.review?.precision != null ? `Подтверждено ${r.review.confirmed}, отклонено ${r.review.rejected}` : 'Юристы ещё не принимали решений по находкам этого правила'}>
                         {r.review?.precision != null ? `${Math.round(r.review.precision * 100)} %` : '—'}
                         {r.review?.noisy && <div className="cell-sub">Часто отклоняют</div>}
